@@ -16,23 +16,32 @@ export interface Cached<T> {
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 
 export async function usageToday(env: Env): Promise<number> {
-  const row = await env.DB.prepare('SELECT count FROM usage WHERE day = ?').bind(utcDay()).first<{ count: number }>();
-  return row?.count ?? 0;
+  const row = await env.DB.prepare("SELECT COALESCE(SUM(count), 0) AS n FROM usage WHERE day LIKE ? || '%'").bind(utcDay()).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+// تقسيم الحد اليومي: 60% للمتابعة المباشرة والتنبيهات، و40% لتصفح التطبيق
+// حتى لا يستطيع أحد استهلاك رصيد التنبيهات بطلبات عشوائية من التطبيق
+export type BudgetPurpose = 'live' | 'browse';
+export function budgetCap(env: Env, purpose: BudgetPurpose): number {
+  const limit = dailyLimit(env);
+  const live = Math.ceil(limit * 0.6);
+  return purpose === 'live' ? live : limit - live;
 }
 
 export function dailyLimit(env: Env): number {
   return Number(env.DAILY_REQUEST_LIMIT) || 100;
 }
 
-// يحجز طلباً واحداً من الحد اليومي أو يرمي BudgetExceededError
-export async function consumeBudget(env: Env): Promise<void> {
-  const limit = dailyLimit(env);
+// يحجز طلباً واحداً من حصة الغرض المحدد أو يرمي BudgetExceededError
+export async function consumeBudget(env: Env, purpose: BudgetPurpose): Promise<void> {
+  const limit = budgetCap(env, purpose);
   const row = await env.DB.prepare(
     `INSERT INTO usage (day, count) VALUES (?1, 1)
      ON CONFLICT(day) DO UPDATE SET count = count + 1 WHERE count < ?2
      RETURNING count`,
   )
-    .bind(utcDay(), limit)
+    .bind(`${utcDay()}:${purpose}`, limit)
     .first<{ count: number }>();
   if (!row) throw new BudgetExceededError();
 }
@@ -91,8 +100,22 @@ export async function claimInterval(env: Env, key: string, intervalMs: number, n
   return !!row;
 }
 
+// حدّ بسيط لعدد الطلبات لكل مفتاح (مثل عنوان IP) خلال نافذة زمنية
+export async function rateLimit(env: Env, bucket: string, limit: number, windowSec: number, now = Date.now()): Promise<boolean> {
+  const start = Math.floor(now / 1000 / windowSec) * windowSec;
+  const row = await env.DB.prepare(
+    `INSERT INTO meta (key, value) VALUES (?1, '1')
+     ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)
+     RETURNING CAST(value AS INTEGER) AS n`,
+  )
+    .bind(`rl:${start}:${bucket}`)
+    .first<{ n: number }>();
+  return (row?.n ?? 0) <= limit;
+}
+
 export async function cleanup(env: Env, now = Date.now()): Promise<void> {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM meta WHERE key LIKE 'rl:%' AND CAST(substr(key, 4, 10) AS INTEGER) < ?").bind(Math.floor(now / 1000) - 86400),
     env.DB.prepare('DELETE FROM cache WHERE expires_at < ?').bind(now - 7 * 86_400_000),
     env.DB.prepare('DELETE FROM match_state WHERE kickoff < ?').bind(now - 3 * 86_400_000),
     env.DB.prepare('DELETE FROM usage WHERE day < ?').bind(utcDay(now - 30 * 86_400_000)),

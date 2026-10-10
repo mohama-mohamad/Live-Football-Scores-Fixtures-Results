@@ -1,9 +1,9 @@
 // نقطة الدخول: واجهة /api + مهمة التنبيهات الدورية (Cron)
 // الملفات الثابتة للتطبيق تُخدم تلقائياً من مجلد app/dist (انظر wrangler.jsonc)
 import type { NotificationEvents, PushPrefs } from '../../shared/types';
-import { LEAGUES } from '../../shared/leagues';
+import { LEAGUES, LEAGUE_IDS } from '../../shared/leagues';
 import type { Env } from './env';
-import { BudgetExceededError, cleanup } from './store';
+import { BudgetExceededError, cleanup, rateLimit } from './store';
 import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
@@ -25,6 +25,9 @@ function json(body: unknown, status = 200, cache = 'no-store'): Response {
 function envelope<T>(r: { data: T; stale: boolean; provider: string }, cache = 'no-store') {
   return json({ data: r.data, stale: r.stale || undefined, provider: r.provider, updatedAt: new Date().toISOString() }, 200, cache);
 }
+
+// حد أقصى للاشتراكات (يحمي من الإغراق ومن تجاوز حدود الخطة المجانية)
+const MAX_SUBSCRIPTIONS = 2000;
 
 const EVENT_KEYS: (keyof NotificationEvents)[] = ['kickoff', 'goal', 'redCard', 'halftime', 'fulltime'];
 
@@ -74,6 +77,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const tz = url.searchParams.get('tz') || 'UTC';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new HttpError(400, 'تاريخ غير صالح');
     if (!isValidTimeZone(tz)) throw new HttpError(400, 'منطقة زمنية غير صالحة');
+    if (Math.abs(Date.parse(date) - Date.now()) > 31 * 86_400_000) throw new HttpError(400, 'التاريخ خارج النطاق المتاح (شهر قبل وبعد)');
     return envelope(await svc.matchesForLocalDate(env, date, tz), 'max-age=15');
   }
 
@@ -85,6 +89,10 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     return envelope(r, 'max-age=10');
   }
 
+  if (method === 'GET' && (m = path.match(/^\/api\/(standings|league)\/(\d+)/)) && !LEAGUE_IDS.has(Number(m[2]))) {
+    throw new HttpError(404, 'البطولة غير مدعومة');
+  }
+
   if (method === 'GET' && (m = path.match(/^\/api\/standings\/(\d+)$/))) {
     const r = await svc.standings(env, Number(m[1]));
     if (!r.data) throw new HttpError(404, 'لا يوجد جدول ترتيب لهذه البطولة');
@@ -94,11 +102,22 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
   if (method === 'GET' && (m = path.match(/^\/api\/league\/(\d+)\/matches$/))) return envelope(await svc.leagueMatches(env, Number(m[1])), 'max-age=60');
 
   // ---------- التنبيهات ----------
+  if (method === 'POST' && path.startsWith('/api/push/')) {
+    // حدّ لكل عنوان IP: 30 طلباً في الساعة (يمنع إغراق قاعدة البيانات باشتراكات وهمية)
+    const ip = req.headers.get('cf-connecting-ip') ?? 'unknown';
+    if (!(await rateLimit(env, `push:${ip}`, 30, 3600))) throw new HttpError(429, 'طلبات كثيرة، حاول لاحقاً');
+  }
+
   if (method === 'POST' && path === '/api/push/subscribe') {
     const body = await readJson(req);
     const sub = parseSubscription(body.subscription);
     const prefs = sanitizePrefs(body.prefs);
     const now = Date.now();
+    const exists = await env.DB.prepare('SELECT 1 FROM subscriptions WHERE endpoint = ?').bind(sub.endpoint).first();
+    if (!exists) {
+      const total = await env.DB.prepare('SELECT COUNT(*) AS n FROM subscriptions').first<{ n: number }>();
+      if ((total?.n ?? 0) >= MAX_SUBSCRIPTIONS) throw new HttpError(503, 'تم بلوغ الحد الأقصى للمشتركين');
+    }
     await env.DB.prepare(
       `INSERT INTO subscriptions (endpoint, p256dh, auth, prefs, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
        ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, prefs = excluded.prefs, updated_at = excluded.updated_at`,

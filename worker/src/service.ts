@@ -5,16 +5,17 @@ import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
-import { cached, claimInterval, consumeBudget, dailyLimit, getMeta, usageToday } from './store';
+import { BudgetExceededError, cached, claimInterval, consumeBudget, dailyLimit, getMeta, usageToday, type BudgetPurpose } from './store';
 import { DAY_MS, localDayRange, utcDate, utcDatesCovering } from './time';
 import { diffMatch, type Notice } from './notify';
 import { generateVapidKeys, sendPush, type VapidKeys } from './push/webpush';
 
-export function getProvider(env: Env): Provider {
+// purpose: من أي حصة يُخصم الطلب (التصفح أو المتابعة المباشرة)
+export function getProvider(env: Env, purpose: BudgetPurpose = 'browse'): Provider {
   if (env.PROVIDER === 'api-football') {
     if (!env.API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY غير مضبوط');
     return new ApiFootballProvider(env.API_FOOTBALL_KEY, {
-      onRequest: () => consumeBudget(env),
+      onRequest: () => consumeBudget(env, purpose),
       memo: async (key, ttl, fn) => (await cached(env, key, ttl, fn)).value,
     });
   }
@@ -92,7 +93,7 @@ export async function matchesForLocalDate(env: Env, date: string, tz: string) {
 }
 
 export async function liveMatches(env: Env, ctx?: ExecutionContext) {
-  const p = getProvider(env);
+  const p = getProvider(env, 'live');
   const res = await refreshLive(env, p);
   if (ctx && res.notices.length) ctx.waitUntil(dispatch(env, res.notices));
   const since = Date.now() - 4 * 3600_000;
@@ -104,8 +105,23 @@ export async function liveMatches(env: Env, ctx?: ExecutionContext) {
   return { data: sortMatches(results.map((r) => JSON.parse(r.snapshot) as Match)), stale, provider: p.name };
 }
 
+// هل المباراة معروفة لدينا؟ (لمنع استهلاك الرصيد بمعرّفات عشوائية)
+export async function isKnownMatch(env: Env, id: number): Promise<boolean> {
+  const needle = `{"id":${id},`;
+  const row = await env.DB.prepare(
+    `SELECT 1 FROM match_state WHERE id = ?1
+     UNION ALL SELECT 1 FROM cache WHERE key = ?2
+     UNION ALL SELECT 1 FROM cache WHERE (key LIKE 'date:%' OR key LIKE 'league:%') AND instr(value, ?3) > 0
+     LIMIT 1`,
+  )
+    .bind(id, `match:${id}`, needle)
+    .first();
+  return !!row;
+}
+
 export async function matchDetails(env: Env, id: number) {
   const p = getProvider(env);
+  if (p.limited && !(await isKnownMatch(env, id))) return { data: null, stale: false, provider: p.name };
   const r = await cached<MatchDetails | null>(
     env,
     `match:${id}`,
@@ -153,10 +169,7 @@ export interface RefreshResult {
   notices: Notice[];
 }
 
-// عدد الطلبات المحجوزة للتصفح داخل التطبيق (لا تستهلكها المتابعة المباشرة)
-const RESERVE_FOR_BROWSING = 15;
-
-export async function refreshLive(env: Env, p: Provider = getProvider(env), now = Date.now()): Promise<RefreshResult> {
+export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live'), now = Date.now()): Promise<RefreshResult> {
   if (!(await claimInterval(env, 'live_poll', pollIntervalMs(env, p) - 2000, now))) return { polled: false, reason: 'interval', notices: [] };
 
   // المباريات التي كانت جارية في آخر فحص
@@ -195,14 +208,17 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env), now 
 
   const shouldPoll = !p.limited || openRows.length > 0 || soon.length > 0 || schedule.some(inPlay);
   if (!shouldPoll) return { polled: false, reason: 'no-matches', notices: [] };
-  if (p.limited && dailyLimit(env) - (await usageToday(env)) <= RESERVE_FOR_BROWSING) {
-    return { polled: false, reason: 'budget', notices: [] };
+  let live: Match[];
+  let finals: Match[];
+  try {
+    live = await p.live();
+    const liveIds = new Set(live.map((m) => m.id));
+    const gone = openRows.map((r) => r.id).filter((id) => !liveIds.has(id));
+    finals = gone.length ? await p.matchesByIds(gone) : [];
+  } catch (e) {
+    if (e instanceof BudgetExceededError) return { polled: false, reason: 'budget', notices: [] };
+    throw e;
   }
-
-  const live = await p.live();
-  const liveIds = new Set(live.map((m) => m.id));
-  const gone = openRows.map((r) => r.id).filter((id) => !liveIds.has(id));
-  const finals = gone.length ? await p.matchesByIds(gone) : [];
   const updates = [...live, ...finals];
 
   const prevStates = await loadStates(env, updates.map((m) => m.id));
