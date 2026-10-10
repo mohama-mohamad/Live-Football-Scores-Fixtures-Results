@@ -15,6 +15,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-router-dom": "7.18.4",
+    "workbox-cacheable-response": "7.4.1",
     "workbox-core": "7.4.1",
     "workbox-expiration": "7.4.1",
     "workbox-precaching": "7.4.1",

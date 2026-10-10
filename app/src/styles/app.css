@@ -1255,3 +1255,18 @@ h2.section-title {
   vertical-align: -3px;
   color: #0a84ff;
 }
+
+/* ===== وضع «الشعار فقط» ===== */
+.team.logo-only {
+  justify-content: center;
+  position: relative;
+}
+
+.team-badges {
+  position: absolute;
+  top: -4px;
+  inset-inline-start: calc(50% + 14px);
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}

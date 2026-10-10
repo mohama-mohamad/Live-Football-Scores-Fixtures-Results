@@ -3,7 +3,8 @@
 import { clientsClaim } from 'workbox-core';
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
-import { NetworkFirst } from 'workbox-strategies';
+import { CacheFirst, NetworkFirst } from 'workbox-strategies';
+import { CacheableResponsePlugin } from 'workbox-cacheable-response';
 import { ExpirationPlugin } from 'workbox-expiration';
 import type { PushPayload } from '../../shared/types';
 
@@ -24,6 +25,15 @@ registerRoute(
     cacheName: 'api',
     networkTimeoutSeconds: 8,
     plugins: [new ExpirationPlugin({ maxEntries: 150, maxAgeSeconds: 7 * 86400 })],
+  }),
+);
+
+// شعارات الفرق والبطولات: تُحفظ في الجهاز 30 يوماً (لا تتغير تقريباً)
+registerRoute(
+  ({ url, request }) => request.destination === 'image' && url.hostname === 'media.api-sports.io',
+  new CacheFirst({
+    cacheName: 'logos',
+    plugins: [new CacheableResponsePlugin({ statuses: [0, 200] }), new ExpirationPlugin({ maxEntries: 500, maxAgeSeconds: 30 * 86400 })],
   }),
 );
 

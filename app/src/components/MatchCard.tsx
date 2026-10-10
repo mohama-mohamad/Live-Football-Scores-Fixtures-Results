@@ -7,6 +7,7 @@ import { Logo } from './TeamLogo';
 
 export function MatchCard({ m }: { m: Match }) {
   const favIds = useStore((s) => s.favTeams);
+  const logoOnly = useStore((s) => s.settings.teamDisplay === 'logo');
   const live = isLive(m.status);
   const done = isFinished(m.status);
   const started = live || done;
@@ -18,14 +19,30 @@ export function MatchCard({ m }: { m: Match }) {
   const side = (key: 'home' | 'away') => {
     const t = m[key];
     const reds = redCount(t.id);
+    const name = teamName(t.name);
+    // بدون شعار نُبقي الاسم ظاهراً حتى لا تلتبس الفرق
+    const hideName = logoOnly && !!t.logo;
     return (
-      <div className={`team team-${key} ${winner === key ? 'win' : ''} ${winner && winner !== key ? 'lose' : ''}`}>
-        <Logo src={t.logo} name={teamName(t.name)} />
+      <div
+        className={`team team-${key} ${winner === key ? 'win' : ''} ${winner && winner !== key ? 'lose' : ''} ${hideName ? 'logo-only' : ''}`}
+        title={name}
+        aria-label={hideName ? name : undefined}
+      >
+        <Logo src={t.logo} name={name} size={hideName ? 40 : 28} />
+        {hideName ? (
+          (fav(t.id) || reds > 0) && (
+            <span className="team-badges">
+              {fav(t.id) && <span className="fav-dot">★</span>}
+              {reds > 0 && <span className="red-card">{reds > 1 ? reds : ''}</span>}
+            </span>
+          )
+        ) : (
         <span className="team-name">
           {fav(t.id) && <span className="fav-dot" aria-label="مفضل">★</span>}
           {teamName(t.name)}
           {reds > 0 && <span className="red-card" aria-label={`${reds} بطاقة حمراء`}>{reds > 1 ? reds : ''}</span>}
         </span>
+        )}
       </div>
     );
   };

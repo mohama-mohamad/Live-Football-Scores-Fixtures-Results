@@ -4,6 +4,8 @@ import type { NotificationEvents, Team } from '../../../shared/types';
 
 export interface Settings {
   theme: 'auto' | 'light' | 'dark';
+  // عرض الفرق في القوائم: الشعار مع الاسم، أو الشعار فقط
+  teamDisplay: 'both' | 'logo';
   events: NotificationEvents;
   notificationsEnabled: boolean;
 }
@@ -20,6 +22,7 @@ const DEFAULT: State = {
   favLeagues: [307],
   settings: {
     theme: 'auto',
+    teamDisplay: 'both',
     notificationsEnabled: false,
     events: { kickoff: true, goal: true, redCard: true, halftime: false, fulltime: true },
   },

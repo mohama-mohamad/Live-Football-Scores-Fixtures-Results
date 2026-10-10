@@ -143,6 +143,23 @@ export function SettingsPage() {
       </section>
 
       <section className="panel">
+        <h2>عرض الفرق</h2>
+        <div className="segmented">
+          {(
+            [
+              ['both', 'الشعار والاسم'],
+              ['logo', 'الشعار فقط'],
+            ] as const
+          ).map(([k, label]) => (
+            <button key={k} className={settings.teamDisplay === k ? 'on' : ''} onClick={() => updateSettings({ teamDisplay: k })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="hint">في وضع «الشعار فقط» يظهر الاسم عند الضغط على المباراة، أو إذا لم يتوفر شعار للفريق.</p>
+      </section>
+
+      <section className="panel">
         <h2>المظهر</h2>
         <div className="segmented">
           {(
