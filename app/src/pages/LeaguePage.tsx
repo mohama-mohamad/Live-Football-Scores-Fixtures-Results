@@ -8,7 +8,7 @@ import { MatchCard } from '../components/MatchCard';
 import { Logo } from '../components/TeamLogo';
 import { Empty, ErrorBox, Loading, StaleBanner } from '../components/States';
 import { addDays, formatFullDate, isFinished, todayKey } from '../lib/format';
-import { toggleLeague, toggleTeam, useStore } from '../lib/store';
+import { isFavTeam, toggleLeague, toggleTeam, useStore } from '../lib/store';
 
 const TABS = [
   { key: 'table', label: 'الترتيب' },
@@ -38,7 +38,7 @@ function Table({ data }: { data: Standings }) {
             </thead>
             <tbody>
               {g.rows.map((r) => {
-                const fav = favTeams.some((t) => t.id === r.team.id);
+                const fav = isFavTeam(favTeams, r.team);
                 return (
                   <tr key={r.team.id} className={fav ? 'fav' : ''}>
                     <td className="rank">{r.rank}</td>
@@ -98,7 +98,7 @@ function RecentLeagueMatches({ id }: { id: number }) {
   return (
     <>
       <div className="banner info">
-        <span>جدول الترتيب غير متاح في خطة البيانات الحالية. تظهر هنا مباريات البطولة من أمس إلى غد.</span>
+        <span>جدول الترتيب غير متاح لهذه البطولة في خطة البيانات الحالية. تظهر هنا مباريات البطولة من أمس إلى غد.</span>
       </div>
       <h2 className="section-title">القادمة والجارية</h2>
       <MatchList list={next} empty="لا توجد مباريات اليوم أو غداً" />
@@ -113,7 +113,8 @@ export function LeaguePage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as (typeof TABS)[number]['key']) ?? 'table';
   const meta = useMeta();
-  const standingsOn = meta.data?.features?.standings ?? true;
+  const f = meta.data?.features;
+  const standingsOn = f?.standingsLeagues ? f.standingsLeagues.includes(id) : (f?.standings ?? true);
   const standings = useStandings(id, standingsOn && meta.isSuccess);
   const matches = useLeagueMatches(id, standingsOn && meta.isSuccess);
   const favs = useStore((s) => s.favLeagues);

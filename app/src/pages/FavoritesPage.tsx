@@ -7,7 +7,7 @@ import { BellIcon } from '../components/Icons';
 import { Logo } from '../components/TeamLogo';
 import { Empty, Loading } from '../components/States';
 import { todayKey } from '../lib/format';
-import { toggleLeague, toggleTeam, useStore } from '../lib/store';
+import { isFavTeam, toggleLeague, toggleTeam, useStore } from '../lib/store';
 
 export function FavoritesPage() {
   const favTeams = useStore((s) => s.favTeams);
@@ -15,8 +15,7 @@ export function FavoritesPage() {
   const notifOn = useStore((s) => s.settings.notificationsEnabled);
   const today = useMatches(todayKey());
 
-  const teamIds = new Set(favTeams.map((t) => t.id));
-  const todays = (today.data?.data ?? []).filter((m) => teamIds.has(m.home.id) || teamIds.has(m.away.id));
+  const todays = (today.data?.data ?? []).filter((m) => isFavTeam(favTeams, m.home) || isFavTeam(favTeams, m.away));
 
   return (
     <>

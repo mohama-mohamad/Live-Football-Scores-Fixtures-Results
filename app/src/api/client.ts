@@ -30,7 +30,7 @@ export interface Meta {
   limit: number | null;
   pollSeconds: number;
   favPollSeconds: number;
-  features: { standings: boolean; dateWindow: number };
+  features: { standings: boolean; standingsLeagues?: number[]; afWindow?: number; dateWindow: number; secondary?: boolean };
 }
 
 export const useMeta = () => useQuery({ queryKey: ['meta'], queryFn: () => api<Meta>('/api/meta'), staleTime: 60_000 });

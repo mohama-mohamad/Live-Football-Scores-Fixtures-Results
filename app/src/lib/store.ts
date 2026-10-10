@@ -1,6 +1,7 @@
 // حالة محلية محفوظة في الجهاز: المفضلة والإعدادات
 import { useSyncExternalStore } from 'react';
 import type { NotificationEvents, Team } from '../../../shared/types';
+import { SECONDARY_TEAM_OFFSET, teamKey } from '../../../shared/teams';
 
 export interface Settings {
   theme: 'auto' | 'light' | 'dark';
@@ -75,10 +76,17 @@ export function useStore<T>(select: (s: State) => T): T {
   return useSyncExternalStore(subscribe, () => select(state));
 }
 
+// هل الفريق في المفضلة؟ بالمعرّف، أو بالاسم لفرق أُضيفت من football-data.org (معرّفاتها مختلفة)
+export function isFavTeam(favs: Team[], team: Team): boolean {
+  return favs.some((f) => f.id === team.id || (f.id >= SECONDARY_TEAM_OFFSET && teamKey(f.name, f.short) === teamKey(team.name, team.short)));
+}
+
 export function toggleTeam(team: Team) {
   setState((s) => ({
     ...s,
-    favTeams: s.favTeams.some((t) => t.id === team.id) ? s.favTeams.filter((t) => t.id !== team.id) : [...s.favTeams, { id: team.id, name: team.name, logo: team.logo }],
+    favTeams: isFavTeam(s.favTeams, team)
+      ? s.favTeams.filter((t) => !isFavTeam([t], team))
+      : [...s.favTeams, { id: team.id, name: team.name, short: team.short, logo: team.logo }],
   }));
 }
 

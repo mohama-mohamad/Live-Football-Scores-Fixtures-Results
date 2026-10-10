@@ -10,6 +10,7 @@ export interface Env {
   DATE_WINDOW_DAYS?: string; // عدد الأيام المتاحة قبل وبعد اليوم
   // أسرار اختيارية (wrangler secret put ...). مفاتيح VAPID تُولَّد تلقائياً إن لم تُضبط
   API_FOOTBALL_KEY?: string;
+  FOOTBALL_DATA_KEY?: string; // مزوّد ثانٍ اختياري: جداول الترتيب ومباريات الأيام القادمة
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
 }

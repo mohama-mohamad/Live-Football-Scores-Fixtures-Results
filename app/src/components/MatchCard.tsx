@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import type { Match } from '../../../shared/types';
 import { teamName } from '../../../shared/teams';
 import { isFinished, isLive, statusLabel } from '../lib/format';
-import { useStore } from '../lib/store';
+import { isFavTeam, useStore } from '../lib/store';
 import { Logo } from './TeamLogo';
 
 export function MatchCard({ m }: { m: Match }) {
@@ -11,7 +11,7 @@ export function MatchCard({ m }: { m: Match }) {
   const live = isLive(m.status);
   const done = isFinished(m.status);
   const started = live || done;
-  const fav = (id: number) => favIds.some((t) => t.id === id);
+  const fav = (key: 'home' | 'away') => isFavTeam(favIds, m[key]);
   const winner = done && m.score.home != null && m.score.away != null ? (m.score.home > m.score.away ? 'home' : m.score.away > m.score.home ? 'away' : null) : null;
   const pens = m.penalties?.home != null ? `(${m.penalties.home} - ${m.penalties.away})` : null;
   const redCount = (teamId: number) => (m.events ?? []).filter((e) => e.type === 'red' && e.teamId === teamId).length;
@@ -30,15 +30,15 @@ export function MatchCard({ m }: { m: Match }) {
       >
         <Logo src={t.logo} name={name} size={hideName ? 40 : 28} />
         {hideName ? (
-          (fav(t.id) || reds > 0) && (
+          (fav(key) || reds > 0) && (
             <span className="team-badges">
-              {fav(t.id) && <span className="fav-dot">★</span>}
+              {fav(key) && <span className="fav-dot">★</span>}
               {reds > 0 && <span className="red-card">{reds > 1 ? reds : ''}</span>}
             </span>
           )
         ) : (
         <span className="team-name">
-          {fav(t.id) && <span className="fav-dot" aria-label="مفضل">★</span>}
+          {fav(key) && <span className="fav-dot" aria-label="مفضل">★</span>}
           {teamName(t.name)}
           {reds > 0 && <span className="red-card" aria-label={`${reds} بطاقة حمراء`}>{reds > 1 ? reds : ''}</span>}
         </span>

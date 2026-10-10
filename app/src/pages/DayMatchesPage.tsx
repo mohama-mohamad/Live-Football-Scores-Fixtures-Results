@@ -4,7 +4,7 @@ import { DateStrip } from '../components/DateStrip';
 import { LeagueSection, groupByLeague, sortGroups } from '../components/LeagueSection';
 import { Empty, ErrorBox, Loading, StaleBanner } from '../components/States';
 import { dayTitle, isFinished, todayKey } from '../lib/format';
-import { useStore } from '../lib/store';
+import { isFavTeam, useStore } from '../lib/store';
 
 // "المباريات": اليوم وحتى 7 أيام قادمة (غير المنتهية)
 // "النتائج": اليوم وحتى 7 أيام سابقة (المنتهية)
@@ -16,7 +16,11 @@ export function DayMatchesPage({ mode }: { mode: 'fixtures' | 'results' }) {
   const favTeams = useStore((s) => s.favTeams);
   const favLeagues = useStore((s) => s.favLeagues);
   // عدد الأيام المتاحة حسب خطة البيانات (المجانية: أمس واليوم وغداً)
-  const span = Math.min(7, useMeta().data?.features?.dateWindow ?? 7);
+  const features = useMeta().data?.features;
+  const span = Math.min(7, features?.dateWindow ?? 7);
+  // خارج نطاق API-Football تظهر بطولات football-data.org فقط
+  const afWindow = features?.afWindow ?? 31;
+  const partial = !!features?.secondary && Math.abs(Math.round((Date.parse(date) - Date.parse(todayKey())) / 86_400_000)) > afWindow;
 
   const set = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -26,8 +30,7 @@ export function DayMatchesPage({ mode }: { mode: 'fixtures' | 'results' }) {
 
   let list = (q.data?.data ?? []).filter((m) => (mode === 'results' ? isFinished(m.status) : !isFinished(m.status)));
   if (onlyFav) {
-    const ids = new Set(favTeams.map((t) => t.id));
-    list = list.filter((m) => ids.has(m.home.id) || ids.has(m.away.id) || favLeagues.includes(m.league.id));
+    list = list.filter((m) => isFavTeam(favTeams, m.home) || isFavTeam(favTeams, m.away) || favLeagues.includes(m.league.id));
   }
 
   return (
@@ -44,6 +47,11 @@ export function DayMatchesPage({ mode }: { mode: 'fixtures' | 'results' }) {
           </button>
         </div>
       </div>
+      {partial && (
+        <div className="banner info">
+          <span>في هذا اليوم تظهر البطولات الأوروبية الكبرى فقط (باقي البطولات متاحة من أمس إلى غد في الخطة المجانية).</span>
+        </div>
+      )}
       <StaleBanner show={q.data?.stale} />
       {q.isPending ? (
         <Loading rows={6} />

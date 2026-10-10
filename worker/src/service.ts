@@ -1,12 +1,23 @@
 // منطق التطبيق: جلب البيانات مع الذاكرة المؤقتة، وتحديث المباريات المباشرة، وإرسال التنبيهات
 import type { Match, MatchDetails, PushPrefs, Standings } from '../../shared/types';
-import { leaguePriority } from '../../shared/leagues';
+import { LEAGUES, leaguePriority } from '../../shared/leagues';
+import { teamKey } from '../../shared/teams';
 import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
 import { BudgetExceededError, budgetCap, cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
 import { computePlan, matchWindow, type LivePlan, type TimeWindow } from './plan';
+import {
+  hasSecondary,
+  isSecondaryMatch,
+  recordTeams,
+  secondaryDay,
+  secondaryLeagueMatches,
+  secondaryLeagues,
+  secondaryMatch,
+  secondaryStandings,
+} from './secondary';
 import { DAY_MS, localDayRange, utcDate, utcDatesCovering } from './time';
 import { diffMatch, type Notice } from './notify';
 import { generateVapidKeys, sendPush, type VapidKeys } from './push/webpush';
@@ -47,7 +58,19 @@ function metered(p: Provider, onRequest: () => Promise<void>): Provider {
 
 // ما تتيحه خطة البيانات الحالية
 export function features(env: Env) {
-  return { standings: env.STANDINGS_ENABLED !== 'false', dateWindow: Number(env.DATE_WINDOW_DAYS) || 31 };
+  const afWindow = Number(env.DATE_WINDOW_DAYS) || 31;
+  const afStandings = env.STANDINGS_ENABLED !== 'false';
+  const sec = secondaryLeagues(env);
+  return {
+    // البطولات التي لها جدول ترتيب (من API-Football أو من football-data.org)
+    standingsLeagues: afStandings ? LEAGUES.map((l) => l.id) : sec,
+    standings: afStandings || sec.length > 0,
+    // الأيام المتاحة لكل البطولات (API-Football)
+    afWindow,
+    // الأيام المتاحة إجمالاً (بعد afWindow تظهر بطولات football-data.org فقط)
+    dateWindow: sec.length ? Math.max(afWindow, 7) : afWindow,
+    secondary: sec.length > 0,
+  };
 }
 
 // أقل مدة بين محاولتين لنفس الطلب على المزوّد المحدود (ثوانٍ)
@@ -78,7 +101,18 @@ function dateTtl(p: Provider, date: string, now: number): number {
 }
 
 async function utcDayMatches(env: Env, p: Provider, date: string, now = Date.now()) {
-  return cached(env, `date:${date}`, dateTtl(p, date, now), () => p.matchesByUtcDate(date), p.limited ? 600 : 0);
+  return cached(
+    env,
+    `date:${date}`,
+    dateTtl(p, date, now),
+    async () => {
+      const list = await p.matchesByUtcDate(date);
+      // نتعلّم معرّفات الفرق لربطها ببيانات المزوّد الثاني
+      if (p.limited) await recordTeams(env, list, now);
+      return list;
+    },
+    p.limited ? 600 : 0,
+  );
 }
 
 interface StateRow {
@@ -105,7 +139,16 @@ export async function matchesForLocalDate(env: Env, date: string, tz: string) {
   const p = getProvider(env);
   const [start, end] = localDayRange(date, tz);
   // نتحمّل فشل أحد الأيام (مثلاً يوم خارج نطاق الخطة) ونعرض ما توفر
-  const settled = await Promise.allSettled(utcDatesCovering(start, end).map((d) => utcDayMatches(env, p, d)));
+  const { afWindow } = features(env);
+  const now = Date.now();
+  const dayLoader = (d: string) => {
+    const diff = Math.abs(Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${utcDate(now)}T00:00:00Z`)) / DAY_MS));
+    if (!p.limited || diff <= afWindow) return utcDayMatches(env, p, d, now);
+    // خارج نطاق API-Football: البطولات الكبرى من football-data.org
+    if (hasSecondary(env)) return secondaryDay(env, d, now);
+    return Promise.reject(new Error('out of range'));
+  };
+  const settled = await Promise.allSettled(utcDatesCovering(start, end).map(dayLoader));
   const days = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
   if (!days.length) throw (settled[0] as PromiseRejectedResult).reason;
   let stale = days.length < settled.length;
@@ -148,7 +191,7 @@ export async function isKnownMatch(env: Env, id: number): Promise<boolean> {
   const row = await env.DB.prepare(
     `SELECT 1 FROM match_state WHERE id = ?1
      UNION ALL SELECT 1 FROM cache WHERE key = ?2
-     UNION ALL SELECT 1 FROM cache WHERE (key LIKE 'date:%' OR key LIKE 'league:%') AND instr(value, ?3) > 0
+     UNION ALL SELECT 1 FROM cache WHERE (key LIKE 'date:%' OR key LIKE 'league:%' OR key LIKE 'fd:date:%' OR key LIKE 'fd:league:%') AND instr(value, ?3) > 0
      LIMIT 1`,
   )
     .bind(id, `match:${id}`, needle)
@@ -159,6 +202,11 @@ export async function isKnownMatch(env: Env, id: number): Promise<boolean> {
 export async function matchDetails(env: Env, id: number) {
   const p = getProvider(env);
   if (p.limited && !(await isKnownMatch(env, id))) return { data: null, stale: false, provider: p.name };
+  if (isSecondaryMatch(id)) {
+    if (!hasSecondary(env)) return { data: null, stale: false, provider: p.name };
+    const r = await secondaryMatch(env, id);
+    return { data: r.value, stale: r.stale, provider: 'football-data' };
+  }
   const r = await cached<MatchDetails | null>(
     env,
     `match:${id}`,
@@ -184,12 +232,20 @@ export async function matchDetails(env: Env, id: number) {
 
 export async function standings(env: Env, leagueId: number) {
   const p = getProvider(env);
+  if (p.limited && env.STANDINGS_ENABLED === 'false') {
+    const r = await secondaryStandings(env, leagueId);
+    return { data: r.value, stale: r.stale, provider: 'football-data' };
+  }
   const r = await cached<Standings | null>(env, `standings:${leagueId}`, p.limited ? 6 * 3600 : 60, () => p.standings(leagueId), p.limited ? RETRY_SEC : 0);
   return { data: r.value, stale: r.stale, provider: p.name };
 }
 
 export async function leagueMatches(env: Env, leagueId: number) {
   const p = getProvider(env);
+  if (p.limited && env.STANDINGS_ENABLED === 'false') {
+    const r = await secondaryLeagueMatches(env, leagueId);
+    return { data: r.value, stale: r.stale, provider: 'football-data' };
+  }
   const r = await cached(env, `league:${leagueId}`, p.limited ? 3 * 3600 : 30, () => p.leagueMatches(leagueId), p.limited ? RETRY_SEC : 0);
   return { data: r.value, stale: r.stale, provider: p.name };
 }
@@ -213,22 +269,30 @@ async function currentPlan(env: Env): Promise<LivePlan | null> {
 }
 
 // الفرق ذات الأولوية = الفرق المفضلة لدى المشتركين في التنبيهات
-let favCache: { at: number; teams: Set<number> } | null = null;
+interface Priority {
+  ids: Set<number>;
+  keys: Set<string>;
+}
+let favCache: { at: number; fav: Priority } | null = null;
 export const invalidatePriorityTeams = () => void (favCache = null);
-async function priorityTeams(env: Env, now: number): Promise<Set<number>> {
-  if (favCache && now - favCache.at < 120_000) return favCache.teams;
+async function priorityTeams(env: Env, now: number): Promise<Priority> {
+  if (favCache && now - favCache.at < 120_000) return favCache.fav;
   const { results } = await env.DB.prepare('SELECT prefs FROM subscriptions').all<{ prefs: string }>();
-  const teams = new Set<number>();
+  const fav: Priority = { ids: new Set(), keys: new Set() };
   for (const r of results) {
     try {
-      for (const t of (JSON.parse(r.prefs) as PushPrefs).teams ?? []) teams.add(t);
+      const prefs = JSON.parse(r.prefs) as PushPrefs;
+      for (const t of prefs.teams ?? []) fav.ids.add(t);
+      for (const k of prefs.teamKeys ?? []) fav.keys.add(k);
     } catch {
       /* تجاهل */
     }
   }
-  favCache = { at: now, teams };
-  return teams;
+  favCache = { at: now, fav };
+  return fav;
 }
+
+const isFavTeam = (fav: Priority, t: { id: number; name: string }) => fav.ids.has(t.id) || (fav.keys.size > 0 && fav.keys.has(teamKey(t.name)));
 
 // ---------- المتابعة المباشرة ----------
 
@@ -287,7 +351,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
       const w = matchWindow(m, now);
       if (!w) continue;
       all.push(w);
-      if (fav.has(m.home.id) || fav.has(m.away.id)) favW.push(w);
+      if (isFavTeam(fav, m.home) || isFavTeam(fav, m.away)) favW.push(w);
     }
     const remaining = budgetCap(env, 'live') - (await usageFor(env, 'live'));
     const plan = computePlan({ favWindows: favW, allWindows: all, remaining, now, slowFloorSec: pollIntervalMs(env, p) / 1000 });
@@ -333,6 +397,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     );
   }
   if (writes.length) await env.DB.batch(writes);
+  if (p.limited) await recordTeams(env, updates, now);
   return { polled: true, notices };
 }
 
@@ -366,7 +431,10 @@ interface SubRow {
 export function wants(prefs: PushPrefs, n: Notice): boolean {
   if (!prefs.events?.[n.kind]) return false;
   const m = n.match;
-  return prefs.teams.includes(m.home.id) || prefs.teams.includes(m.away.id) || prefs.leagues.includes(m.league.id);
+  if (prefs.teams.includes(m.home.id) || prefs.teams.includes(m.away.id) || prefs.leagues.includes(m.league.id)) return true;
+  // فرق أُضيفت من بيانات football-data.org ولم يُعرف معرّفها بعد: نطابق بالاسم
+  const keys = prefs.teamKeys ?? [];
+  return keys.length > 0 && (keys.includes(teamKey(m.home.name)) || keys.includes(teamKey(m.away.name)));
 }
 
 export async function dispatch(env: Env, notices: Notice[]): Promise<{ sent: number; failed: number; removed: number }> {

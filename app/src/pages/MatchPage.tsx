@@ -7,7 +7,7 @@ import { StarIcon } from '../components/Icons';
 import { Logo } from '../components/TeamLogo';
 import { Empty, ErrorBox, Loading, StaleBanner } from '../components/States';
 import { formatFullDate, formatTime, isLive, STAT_LABELS, statusLabel } from '../lib/format';
-import { toggleTeam, useStore } from '../lib/store';
+import { isFavTeam, toggleTeam, useStore } from '../lib/store';
 
 const TABS = [
   { key: 'events', label: 'الأحداث' },
@@ -48,7 +48,7 @@ function eventText(e: MatchEvent): { main: string; sub?: string } {
 }
 
 function FavStar({ team }: { team: Team }) {
-  const fav = useStore((s) => s.favTeams.some((t) => t.id === team.id));
+  const fav = useStore((s) => isFavTeam(s.favTeams, team));
   return (
     <button className={`icon-btn star small ${fav ? 'on' : ''}`} onClick={() => toggleTeam(team)} aria-label={fav ? 'إزالة من المفضلة' : 'إضافة للمفضلة'} aria-pressed={fav}>
       <StarIcon filled={fav} width={18} height={18} />

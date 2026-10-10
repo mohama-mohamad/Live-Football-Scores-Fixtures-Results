@@ -36,7 +36,8 @@ function sanitizePrefs(raw: unknown): PushPrefs {
   const ids = (v: unknown) => (Array.isArray(v) ? v.map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 300) : []);
   const ev = (r.events ?? {}) as Partial<NotificationEvents>;
   const events = Object.fromEntries(EVENT_KEYS.map((k) => [k, ev[k] !== false])) as unknown as NotificationEvents;
-  return { teams: ids(r.teams), leagues: ids(r.leagues), events };
+  const teamKeys = Array.isArray(r.teamKeys) ? r.teamKeys.filter((k): k is string => typeof k === 'string' && k.length > 0 && k.length <= 80).slice(0, 300) : [];
+  return { teams: ids(r.teams), teamKeys, leagues: ids(r.leagues), events };
 }
 
 function parseSubscription(raw: unknown): { endpoint: string; p256dh: string; auth: string } {
@@ -93,7 +94,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (method === 'GET' && (m = path.match(/^\/api\/(standings|league)\/(\d+)/))) {
     if (!LEAGUE_IDS.has(Number(m[2]))) throw new HttpError(404, 'البطولة غير مدعومة');
-    if (!svc.features(env).standings) throw new HttpError(404, 'جداول الترتيب غير متاحة في خطة البيانات الحالية');
+    if (!svc.features(env).standingsLeagues.includes(Number(m[2]))) throw new HttpError(404, 'جدول الترتيب غير متاح لهذه البطولة في خطة البيانات الحالية');
   }
 
   if (method === 'GET' && (m = path.match(/^\/api\/standings\/(\d+)$/))) {

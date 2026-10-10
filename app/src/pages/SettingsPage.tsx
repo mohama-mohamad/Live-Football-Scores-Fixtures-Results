@@ -180,7 +180,9 @@ export function SettingsPage() {
         <h2>حول التطبيق</h2>
         <div className="info-row">
           <span className="muted">مصدر البيانات</span>
-          <span>{meta.data ? (meta.data.provider === 'mock' ? 'بيانات تجريبية' : 'API-Football') : '…'}</span>
+          <span>
+            {meta.data ? (meta.data.provider === 'mock' ? 'بيانات تجريبية' : meta.data.features?.secondary ? 'API-Football + football-data.org' : 'API-Football') : '…'}
+          </span>
         </div>
         {meta.data?.limited && (
           <div className="info-row">

@@ -111,7 +111,7 @@ const RAW: Record<string, string> = {
   'aston villa': 'أستون فيلا',
   'bournemouth|afc bournemouth': 'بورنموث',
   'brentford': 'برينتفورد',
-  'brighton|brighton hove albion|brighton and hove albion': 'برايتون',
+  'brighton|brighton hove albion|brighton and hove albion|brighton & hove albion|brighton hove': 'برايتون',
   'burnley': 'بيرنلي',
   'chelsea': 'تشيلسي',
   'crystal palace': 'كريستال بالاس',
@@ -130,13 +130,15 @@ const RAW: Record<string, string> = {
   'leicester|leicester city': 'ليستر سيتي',
   'southampton': 'ساوثهامبتون',
   'ipswich|ipswich town': 'إبسويتش',
+  'hull city|hull': 'هال سيتي',
+  'coventry city|coventry': 'كوفنتري سيتي',
   'norwich|norwich city': 'نوريتش',
   'sheffield utd|sheffield united': 'شيفيلد يونايتد',
   'watford': 'واتفورد',
   // إسبانيا
   'real madrid': 'ريال مدريد',
   'barcelona': 'برشلونة',
-  'atletico madrid|atletico de madrid': 'أتلتيكو مدريد',
+  'atletico madrid|atletico de madrid|club atletico de madrid|atleti': 'أتلتيكو مدريد',
   'athletic club|athletic bilbao': 'أتلتيك بلباو',
   'real sociedad': 'ريال سوسيداد',
   'real betis|betis': 'ريال بيتيس',
@@ -153,6 +155,9 @@ const RAW: Record<string, string> = {
   'espanyol': 'إسبانيول',
   'levante': 'ليفانتي',
   'elche': 'إلتشي',
+  'malaga|malaga cf': 'ملقة',
+  'deportivo la coruna|rc deportivo la coruna|deportivo': 'ديبورتيفو لاكورونيا',
+  'racing santander|real racing club de santander|santander': 'راسينغ سانتاندير',
   'real oviedo|oviedo': 'ريال أوفييدو',
   // إيطاليا
   'inter|inter milan|internazionale': 'إنتر ميلان',
@@ -167,7 +172,7 @@ const RAW: Record<string, string> = {
   'torino': 'تورينو',
   'udinese': 'أودينيزي',
   'genoa': 'جنوى',
-  'como': 'كومو',
+  'como|como 1907': 'كومو',
   'cagliari': 'كالياري',
   'lecce': 'ليتشي',
   'parma': 'بارما',
@@ -190,13 +195,14 @@ const RAW: Record<string, string> = {
   'borussia monchengladbach|monchengladbach': 'بوروسيا مونشنغلادباخ',
   'vfl wolfsburg|wolfsburg': 'فولفسبورغ',
   'sc freiburg|freiburg': 'فرايبورغ',
-  'werder bremen': 'فيردر بريمن',
+  'werder bremen|sv werder bremen|bremen': 'فيردر بريمن',
   'union berlin': 'يونيون برلين',
   'mainz|mainz 05|fsv mainz 05': 'ماينتس',
   'hoffenheim|1899 hoffenheim': 'هوفنهايم',
   'augsburg|fc augsburg': 'أوغسبورغ',
   'hamburger sv|hamburg': 'هامبورغ',
   'koln|1 fc koln|fc koln': 'كولن',
+  'schalke 04|fc schalke 04|schalke': 'شالكه',
   'sc paderborn 07|paderborn': 'بادربورن',
   'sv elversberg|elversberg': 'إلفرسبيرغ',
   'heidenheim|1 fc heidenheim': 'هايدنهايم',
@@ -218,7 +224,7 @@ const RAW: Record<string, string> = {
   'brest|stade brestois 29': 'بريست',
   'paris fc': 'باريس إف سي',
   'le havre': 'لوهافر',
-  'angers': 'أنجيه',
+  'angers|angers sco': 'أنجيه',
   'lorient': 'لوريان',
   'le mans': 'لومان',
   'auxerre': 'أوكسير',
@@ -226,6 +232,7 @@ const RAW: Record<string, string> = {
   'saint etienne': 'سانت إتيان',
   'montpellier': 'مونبلييه',
   'reims|stade de reims': 'ريمس',
+  'troyes|es troyes ac': 'تروا',
   // البرتغال وهولندا وغيرها
   'benfica': 'بنفيكا',
   'porto|fc porto': 'بورتو',
@@ -236,7 +243,19 @@ const RAW: Record<string, string> = {
   'galatasaray': 'غلطة سراي',
   'fenerbahce': 'فنربخشة',
   'celtic': 'سلتيك',
-  'club brugge': 'كلوب بروج',
+  'club brugge|club brugge kv': 'كلوب بروج',
+  'slavia praha|sk slavia praha|slavia prague': 'سلافيا براغ',
+  'shakhtar donetsk|fk shakhtar donetsk|shakhtar|shaktar': 'شاختار دونيتسك',
+  'aek athens|pae aek|aek athens fc': 'إيك أثينا',
+  'lask|lask linz': 'لاسك لينز',
+  'viking|viking fk': 'فايكنغ',
+  'bodo glimt|bodø glimt|fk bodø glimt|fk bodo glimt': 'بودو غليمت',
+  'slovan bratislava|sk slovan bratislava|sl bratislava': 'سلوفان براتيسلافا',
+  'sabah|sabah fk': 'صباح',
+  'sporting clube de portugal': 'سبورتينغ لشبونة',
+  'feyenoord rotterdam': 'فينورد',
+  'galatasaray sk': 'غلطة سراي',
+  'fenerbahce sk': 'فنربخشة',
   // منتخبات
   'saudi arabia': 'السعودية',
   'egypt': 'مصر',
@@ -278,6 +297,9 @@ const RAW: Record<string, string> = {
   'ghana': 'غانا',
 };
 
+// معرّفات فرق football-data.org تُزاح بهذا المقدار (لا تتداخل مع معرّفات API-Football)
+export const SECONDARY_TEAM_OFFSET = 50_000_000;
+
 export function normalizeName(name: string): string {
   return name
     .normalize('NFD')
@@ -300,6 +322,19 @@ function stripSuffixes(n: string): string {
 const DICT = new Map<string, string>();
 for (const [keys, ar] of Object.entries(RAW)) {
   for (const k of keys.split('|')) DICT.set(normalizeName(k), ar);
+}
+
+// هل يوجد اسم عربي لهذا الفريق؟
+function lookup(name?: string): string | undefined {
+  if (!name) return undefined;
+  const n = normalizeName(name);
+  return DICT.get(n) ?? DICT.get(stripSuffixes(n));
+}
+
+// مفتاح موحّد للفريق بين مزوّدي البيانات (المعرّفات تختلف بينهم):
+// الاسم العربي إن وُجد (من الاسم الكامل أو المختصر)، وإلا الاسم الإنجليزي بعد التطبيع
+export function teamKey(name: string, short?: string): string {
+  return lookup(name) ?? lookup(short) ?? stripSuffixes(normalizeName(name));
 }
 
 export function teamName(name: string): string {

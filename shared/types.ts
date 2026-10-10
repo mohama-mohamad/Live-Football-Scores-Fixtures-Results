@@ -14,6 +14,7 @@ export type MatchStatus =
 export interface Team {
   id: number;
   name: string;
+  short?: string; // الاسم المختصر (من football-data.org) للمساعدة في ربط الفرق بين المزوّدين
   logo?: string;
 }
 
@@ -117,6 +118,8 @@ export interface NotificationEvents {
 
 export interface PushPrefs {
   teams: number[];
+  // مفاتيح أسماء فرق لم يُعرف معرّفها في API-Football بعد (أُضيفت من بيانات football-data.org)
+  teamKeys?: string[];
   leagues: number[];
   events: NotificationEvents;
 }

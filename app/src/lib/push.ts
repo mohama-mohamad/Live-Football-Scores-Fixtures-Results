@@ -1,6 +1,7 @@
 // تفعيل/إيقاف تنبيهات Web Push ومزامنة التفضيلات مع الخادم
 import type { PushPrefs } from '../../../shared/types';
 import { api } from '../api/client';
+import { SECONDARY_TEAM_OFFSET, teamKey } from '../../../shared/teams';
 import { getState, subscribe as onStoreChange, updateSettings } from './store';
 
 export type PushSupport =
@@ -39,7 +40,13 @@ function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
 
 export function currentPrefs(): PushPrefs {
   const s = getState();
-  return { teams: s.favTeams.map((t) => t.id), leagues: s.favLeagues, events: s.settings.events };
+  return {
+    teams: s.favTeams.map((t) => t.id),
+    // فرق football-data.org: يطابقها الخادم بالاسم مع مباريات API-Football المباشرة
+    teamKeys: s.favTeams.filter((t) => t.id >= SECONDARY_TEAM_OFFSET).map((t) => teamKey(t.name, t.short)),
+    leagues: s.favLeagues,
+    events: s.settings.events,
+  };
 }
 
 async function registration() {
