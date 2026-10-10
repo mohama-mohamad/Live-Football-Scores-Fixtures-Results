@@ -204,6 +204,8 @@ export class ApiFootballProvider implements Provider {
     const url = new URL(BASE + path);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
     const res = await this.fetcher(url.toString(), { headers: { 'x-apisports-key': this.key } });
+    // مركز Cloudflare الذي خرج منه الطلب (آخر 3 أحرف من cf-ray)
+    this.lastColo = (res.headers.get('cf-ray') ?? '').split('-')[1] ?? '';
     if (!res.ok) throw new ProviderError(`API-Football HTTP ${res.status}`);
     const text = await res.text();
     // عند رفض الطلب نضيف ترويسات الحدود للرسالة (للتشخيص)
@@ -216,6 +218,7 @@ export class ApiFootballProvider implements Provider {
 
   // آخر ترويسات حدود عند الرفض (تُضاف لرسالة الخطأ)
   lastLimits = '';
+  lastColo = '';
 
   private async get(path: string, params: Record<string, string | number>): Promise<Json[]> {
     const text = await this.fetchText(path, params);

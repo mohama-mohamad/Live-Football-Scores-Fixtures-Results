@@ -377,6 +377,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     await setMeta(env, 'live_failures', String(failures));
     await setMeta(env, 'live_poll', String(now - intervalMs + retryMs));
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    await setMeta(env, 'af_last', JSON.stringify({ at: new Date(now).toISOString(), ok: false, colo: (p as { lastColo?: string }).lastColo ?? '' }));
     // آخر خطأ يُحفظ للتشخيص (يظهر أيضاً في /api/meta)
     await setMeta(env, 'live_error', JSON.stringify({ at: new Date(now).toISOString(), msg: msg.slice(0, 300) }));
     console.warn('live poll failed', msg);
@@ -388,6 +389,11 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
   const notices: Notice[] = [];
   const writes: D1PreparedStatement[] = [];
   writes.push(env.DB.prepare("DELETE FROM meta WHERE key IN ('live_error', 'live_failures')"));
+  writes.push(
+    env.DB.prepare("INSERT INTO meta (key, value) VALUES ('af_last', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(
+      JSON.stringify({ at: new Date(now).toISOString(), ok: true, colo: (p as { lastColo?: string }).lastColo ?? '' }),
+    ),
+  );
   for (const m of updates) {
     const prev = prevStates.get(m.id)?.match;
     notices.push(...diffMatch(prev, m));
