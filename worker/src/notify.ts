@@ -32,16 +32,23 @@ function payload(m: Match, title: string, body: string, kind: string): PushPaylo
   return { title, body, tag: `m${m.id}-${kind}`, url: `/match/${m.id}` };
 }
 
+const FIRST_SEEN_KICKOFF_MIN = 20;
+
 export function diffMatch(prev: Match | undefined, next: Match): Notice[] {
   const out: Notice[] = [];
   const league = leagueName(next.league.id, next.league.name);
   const home = teamName(next.home.name);
   const away = teamName(next.away.name);
 
-  // بداية المباراة (أو أول مرة نراها وهي في دقائقها الأولى)
+  // بداية المباراة (أو أول مرة نراها وهي في دقائقها الأولى).
+  // football-data.org يُعلن بداية المباراة متأخراً بضع دقائق، والوسيط قد يراها أول مرة بعد ربع ساعة تقريباً
   const wasNotStarted = !prev || prev.status === 'scheduled' || prev.status === 'unknown';
-  if (wasNotStarted && next.status === 'live' && (prev || (next.minute ?? 0) <= 5)) {
-    out.push({ kind: 'kickoff', match: next, payload: payload(next, '🟢 انطلقت المباراة', `${home} × ${away} — ${league}`, 'ko') });
+  if (wasNotStarted && next.status === 'live' && (prev || (next.minute ?? 0) <= FIRST_SEEN_KICKOFF_MIN)) {
+    const late = !prev && (next.minute ?? 0) > 3;
+    const scored = (next.score.home ?? 0) + (next.score.away ?? 0) > 0;
+    // إن رأيناها متأخرين: نذكر الدقيقة، والنتيجة إن سُجّل هدف قبل أن نراها
+    const body = scored ? `${scoreLine(next)}${minuteLabel(next.minute)} — ${league}` : `${home} × ${away} — ${league}${late ? minuteLabel(next.minute) : ''}`;
+    out.push({ kind: 'kickoff', match: next, payload: payload(next, '🟢 انطلقت المباراة', body, 'ko') });
   }
 
   // لا ننبّه عن الأهداف والبطاقات لمباراة نراها لأول مرة (لتجنب سيل من التنبيهات القديمة)

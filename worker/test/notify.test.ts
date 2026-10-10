@@ -49,6 +49,16 @@ describe('diffMatch', () => {
     expect(diffMatch(undefined, at({ status: 'live', minute: 60, score: { home: 2, away: 1 } }))).toEqual([]);
   });
 
+  it('announces a kickoff first seen a few minutes late (football-data.org lag), with the score if any', () => {
+    const late = diffMatch(undefined, at({ status: 'live', minute: 7, score: { home: 0, away: 0 } }));
+    expect(late.map((x) => x.kind)).toEqual(['kickoff']);
+    expect(late[0].payload.body).toContain("(7')");
+    const scored = diffMatch(undefined, at({ status: 'live', minute: 14, score: { home: 1, away: 0 } }));
+    expect(scored.map((x) => x.kind)).toEqual(['kickoff']);
+    expect(scored[0].payload.body).toContain('1 - 0');
+    expect(diffMatch(undefined, at({ status: 'live', minute: 25, score: { home: 0, away: 0 } }))).toEqual([]);
+  });
+
   it('reports nothing when nothing changed', () => {
     const live = at({ status: 'live', minute: 30, score: { home: 1, away: 1 } });
     expect(diffMatch(live, { ...live, minute: 31 })).toEqual([]);
