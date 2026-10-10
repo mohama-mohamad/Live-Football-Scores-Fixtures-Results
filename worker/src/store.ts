@@ -136,6 +136,23 @@ export async function rateLimit(env: Env, bucket: string, limit: number, windowS
   return (row?.n ?? 0) <= limit;
 }
 
+// عند تغيير مزوّد البيانات (مثلاً من التجريبي إلى الحقيقي) نمسح البيانات المخزّنة القديمة
+let checkedProvider: string | null = null;
+export async function ensureProvider(env: Env): Promise<void> {
+  const current = env.PROVIDER || 'mock';
+  if (checkedProvider === current) return;
+  const stored = await getMeta(env, 'provider');
+  if (stored !== current) {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM cache'),
+      env.DB.prepare('DELETE FROM match_state'),
+      env.DB.prepare("DELETE FROM meta WHERE key IN ('live_plan', 'live_poll') OR key LIKE 'attempt:%'"),
+      env.DB.prepare('INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('provider', current),
+    ]);
+  }
+  checkedProvider = current;
+}
+
 export async function cleanup(env: Env, now = Date.now()): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM meta WHERE key LIKE 'rl:%' AND CAST(substr(key, 4, 10) AS INTEGER) < ?").bind(Math.floor(now / 1000) - 86400),

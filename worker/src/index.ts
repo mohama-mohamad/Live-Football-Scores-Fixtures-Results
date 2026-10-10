@@ -3,7 +3,7 @@
 import type { NotificationEvents, PushPrefs } from '../../shared/types';
 import { LEAGUES, LEAGUE_IDS } from '../../shared/leagues';
 import type { Env } from './env';
-import { BudgetExceededError, RetryLaterError, cleanup, rateLimit } from './store';
+import { BudgetExceededError, RetryLaterError, cleanup, ensureProvider, rateLimit } from './store';
 import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
@@ -158,6 +158,7 @@ export default {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     try {
+      await ensureProvider(env);
       return await handleApi(req, env, ctx, url);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
@@ -170,6 +171,7 @@ export default {
   },
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    await ensureProvider(env);
     const res = await svc.refreshLive(env);
     if (res.notices.length) {
       const stats = await svc.dispatch(env, res.notices);
