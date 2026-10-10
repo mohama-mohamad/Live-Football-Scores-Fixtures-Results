@@ -141,6 +141,48 @@ function slim(m: MatchDetails): Match {
   return rest;
 }
 
+function parseEnvelope(text: string): Json[] {
+  let body: Json;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new ProviderError('رد غير صالح من API-Football');
+  }
+  const errors = body.errors;
+  const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
+  if (hasErrors) throw new ProviderError(`API-Football: ${Object.values(errors).join(' | ')}`);
+  return Array.isArray(body.response) ? body.response : [];
+}
+
+const MARKER = '{"fixture":';
+const tracked = (list: Json[]) => list.filter((f) => LEAGUE_IDS.has(Number(f.league?.id)));
+
+// يستخرج مباريات الدوريات المتابَعة من رد كبير دون تحليل النص كاملاً:
+// نقسم النص عند بداية كل مباراة، نقرأ معرّف الدوري، ونحلّل المباريات المطلوبة فقط.
+// تحليل 1.5MB كاملاً يقارب حد المعالجة في خطة Cloudflare المجانية (10ms).
+export function extractTracked(text: string): Json[] {
+  const start = text.indexOf('"response":[');
+  if (text.length < 200_000 || start < 0) return tracked(parseEnvelope(text));
+  const parts = text.slice(start + 12).split(MARKER);
+  const out: Json[] = [];
+  try {
+    for (let i = 1; i < parts.length; i++) {
+      const p = parts[i];
+      const k = p.indexOf('"league":{"id":');
+      if (k < 0) throw new Error('format');
+      if (!LEAGUE_IDS.has(parseInt(p.slice(k + 15, k + 27), 10))) continue;
+      const last = i === parts.length - 1;
+      // آخر مباراة يتبعها "]" ثم بقية الغلاف؛ غيرها تنتهي بفاصلة
+      const body = last ? p.slice(0, p.lastIndexOf(']')) : p.replace(/,\s*$/, '');
+      out.push(JSON.parse(MARKER + body));
+    }
+  } catch {
+    // صيغة غير متوقعة: نعود للتحليل الكامل
+    return tracked(parseEnvelope(text));
+  }
+  return out;
+}
+
 export class ApiFootballProvider implements Provider {
   name = 'api-football';
   limited = true;
@@ -156,22 +198,23 @@ export class ApiFootballProvider implements Provider {
     private fetcher: typeof fetch = fetch,
   ) {}
 
-  private async get(path: string, params: Record<string, string | number>): Promise<Json[]> {
+  private async fetchText(path: string, params: Record<string, string | number>): Promise<string> {
     await this.hooks.onRequest?.();
     const url = new URL(BASE + path);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
     const res = await this.fetcher(url.toString(), { headers: { 'x-apisports-key': this.key } });
     if (!res.ok) throw new ProviderError(`API-Football HTTP ${res.status}`);
-    const body: Json = await res.json();
-    const errors = body.errors;
-    const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
-    if (hasErrors) throw new ProviderError(`API-Football: ${Object.values(errors).join(' | ')}`);
-    return Array.isArray(body.response) ? body.response : [];
+    return res.text();
+  }
+
+  private async get(path: string, params: Record<string, string | number>): Promise<Json[]> {
+    return parseEnvelope(await this.fetchText(path, params));
   }
 
   async matchesByUtcDate(date: string): Promise<Match[]> {
-    const list = await this.get('/fixtures', { date, timezone: 'UTC' });
-    return list.filter((f) => LEAGUE_IDS.has(Number(f.league?.id))).map((f) => slim(normFixture(f)));
+    // قائمة اليوم كبيرة جداً (~1.5MB لكل دوريات العالم): نستخرج دورياتنا فقط دون تحليل الكل
+    const text = await this.fetchText('/fixtures', { date, timezone: 'UTC' });
+    return extractTracked(text).map((f) => slim(normFixture(f)));
   }
 
   async live(): Promise<Match[]> {

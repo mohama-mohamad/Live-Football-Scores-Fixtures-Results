@@ -2,12 +2,12 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { leagueConfig, leagueName } from '../../../shared/leagues';
 import { teamName } from '../../../shared/teams';
 import type { Match, Standings } from '../../../shared/types';
-import { useLeagueMatches, useStandings } from '../api/client';
+import { useLeagueMatches, useMatches, useMeta, useStandings } from '../api/client';
 import { StarIcon } from '../components/Icons';
 import { MatchCard } from '../components/MatchCard';
 import { Logo } from '../components/TeamLogo';
 import { Empty, ErrorBox, Loading, StaleBanner } from '../components/States';
-import { formatFullDate } from '../lib/format';
+import { addDays, formatFullDate, isFinished, todayKey } from '../lib/format';
 import { toggleLeague, toggleTeam, useStore } from '../lib/store';
 
 const TABS = [
@@ -87,12 +87,35 @@ function MatchList({ list, empty }: { list: Match[]; empty: string }) {
   );
 }
 
+// عندما لا تتيح الخطة جداول الترتيب: نعرض مباريات البطولة من أمس إلى غد
+function RecentLeagueMatches({ id }: { id: number }) {
+  const today = todayKey();
+  const qs = [useMatches(addDays(today, -1)), useMatches(today), useMatches(addDays(today, 1))];
+  if (qs.some((q) => q.isPending)) return <Loading />;
+  const all = qs.flatMap((q) => q.data?.data ?? []).filter((m) => m.league.id === id);
+  const done = all.filter((m) => isFinished(m.status)).reverse();
+  const next = all.filter((m) => !isFinished(m.status));
+  return (
+    <>
+      <div className="banner info">
+        <span>جدول الترتيب غير متاح في خطة البيانات الحالية. تظهر هنا مباريات البطولة من أمس إلى غد.</span>
+      </div>
+      <h2 className="section-title">القادمة والجارية</h2>
+      <MatchList list={next} empty="لا توجد مباريات اليوم أو غداً" />
+      <h2 className="section-title">آخر النتائج</h2>
+      <MatchList list={done} empty="لا توجد نتائج من أمس أو اليوم" />
+    </>
+  );
+}
+
 export function LeaguePage() {
   const id = Number(useParams().id);
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as (typeof TABS)[number]['key']) ?? 'table';
-  const standings = useStandings(id);
-  const matches = useLeagueMatches(id);
+  const meta = useMeta();
+  const standingsOn = meta.data?.features?.standings ?? true;
+  const standings = useStandings(id, standingsOn && meta.isSuccess);
+  const matches = useLeagueMatches(id, standingsOn && meta.isSuccess);
   const favs = useStore((s) => s.favLeagues);
   const fav = favs.includes(id);
   const name = leagueName(id, standings.data?.data.league.name ?? 'البطولة');
@@ -112,6 +135,10 @@ export function LeaguePage() {
           <StarIcon filled={fav} />
         </button>
       </div>
+      {meta.isSuccess && !standingsOn ? (
+        <RecentLeagueMatches id={id} />
+      ) : (
+      <>
       <div className="segmented" role="tablist">
         {TABS.map((t) => (
           <button key={t.key} role="tab" aria-selected={tab === t.key} className={tab === t.key ? 'on' : ''} onClick={() => setParams({ tab: t.key }, { replace: true })}>
@@ -138,6 +165,8 @@ export function LeaguePage() {
         <MatchList list={matches.data.data.last} empty="لا توجد نتائج حديثة" />
       ) : (
         <MatchList list={matches.data.data.next} empty="لا توجد مباريات قادمة" />
+      )}
+      </>
       )}
     </>
   );

@@ -30,6 +30,7 @@ export interface Meta {
   limit: number | null;
   pollSeconds: number;
   favPollSeconds: number;
+  features: { standings: boolean; dateWindow: number };
 }
 
 export const useMeta = () => useQuery({ queryKey: ['meta'], queryFn: () => api<Meta>('/api/meta'), staleTime: 60_000 });
@@ -41,8 +42,9 @@ export const useLive = () =>
     refetchInterval: 30_000,
   });
 
-export const useMatches = (date: string) =>
+export const useMatches = (date: string, enabled = true) =>
   useQuery({
+    enabled,
     queryKey: ['matches', date, timeZone],
     queryFn: () => api<ApiEnvelope<Match[]>>(`/api/matches?date=${date}&tz=${encodeURIComponent(timeZone)}`),
     refetchInterval: (q) => (date === todayKey() || q.state.data?.data.some((m) => isLive(m.status)) ? 45_000 : false),
@@ -60,11 +62,12 @@ export const useMatch = (id: number) =>
     },
   });
 
-export const useStandings = (leagueId: number) =>
-  useQuery({ queryKey: ['standings', leagueId], queryFn: () => api<ApiEnvelope<Standings>>(`/api/standings/${leagueId}`), staleTime: 5 * 60_000 });
+export const useStandings = (leagueId: number, enabled = true) =>
+  useQuery({ enabled, queryKey: ['standings', leagueId], queryFn: () => api<ApiEnvelope<Standings>>(`/api/standings/${leagueId}`), staleTime: 5 * 60_000 });
 
-export const useLeagueMatches = (leagueId: number) =>
+export const useLeagueMatches = (leagueId: number, enabled = true) =>
   useQuery({
+    enabled,
     queryKey: ['leagueMatches', leagueId],
     queryFn: () => api<ApiEnvelope<{ last: Match[]; next: Match[] }>>(`/api/league/${leagueId}/matches`),
     staleTime: 5 * 60_000,

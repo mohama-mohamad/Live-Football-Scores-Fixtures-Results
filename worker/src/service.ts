@@ -45,6 +45,14 @@ function metered(p: Provider, onRequest: () => Promise<void>): Provider {
   };
 }
 
+// ما تتيحه خطة البيانات الحالية
+export function features(env: Env) {
+  return { standings: env.STANDINGS_ENABLED !== 'false', dateWindow: Number(env.DATE_WINDOW_DAYS) || 31 };
+}
+
+// أقل مدة بين محاولتين لنفس الطلب على المزوّد المحدود (ثوانٍ)
+const RETRY_SEC = 120;
+
 const inPlay = (m: Match) => m.status === 'live' || m.status === 'halftime' || m.status === 'penalties';
 
 export function pollIntervalMs(env: Env, p: Provider): number {
@@ -70,7 +78,7 @@ function dateTtl(p: Provider, date: string, now: number): number {
 }
 
 async function utcDayMatches(env: Env, p: Provider, date: string, now = Date.now()) {
-  return cached(env, `date:${date}`, dateTtl(p, date, now), () => p.matchesByUtcDate(date));
+  return cached(env, `date:${date}`, dateTtl(p, date, now), () => p.matchesByUtcDate(date), p.limited ? 600 : 0);
 }
 
 interface StateRow {
@@ -96,8 +104,11 @@ async function loadStates(env: Env, ids: number[]): Promise<Map<number, { match:
 export async function matchesForLocalDate(env: Env, date: string, tz: string) {
   const p = getProvider(env);
   const [start, end] = localDayRange(date, tz);
-  const days = await Promise.all(utcDatesCovering(start, end).map((d) => utcDayMatches(env, p, d)));
-  let stale = false;
+  // نتحمّل فشل أحد الأيام (مثلاً يوم خارج نطاق الخطة) ونعرض ما توفر
+  const settled = await Promise.allSettled(utcDatesCovering(start, end).map((d) => utcDayMatches(env, p, d)));
+  const days = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+  if (!days.length) throw (settled[0] as PromiseRejectedResult).reason;
+  let stale = days.length < settled.length;
   const byId = new Map<number, { match: Match; fetchedAt: number }>();
   for (const d of days) {
     stale ||= d.stale;
@@ -160,6 +171,7 @@ export async function matchDetails(env: Env, id: number) {
       return untilKickoff < 2 * 3600_000 ? 600 : 3 * 3600;
     },
     () => p.match(id),
+    p.limited ? RETRY_SEC : 0,
   );
   let data = r.value;
   // المباراة الجارية: نستخدم أحدث نتيجة وأحداث من المتابعة المباشرة
@@ -172,13 +184,13 @@ export async function matchDetails(env: Env, id: number) {
 
 export async function standings(env: Env, leagueId: number) {
   const p = getProvider(env);
-  const r = await cached<Standings | null>(env, `standings:${leagueId}`, p.limited ? 6 * 3600 : 60, () => p.standings(leagueId));
+  const r = await cached<Standings | null>(env, `standings:${leagueId}`, p.limited ? 6 * 3600 : 60, () => p.standings(leagueId), p.limited ? RETRY_SEC : 0);
   return { data: r.value, stale: r.stale, provider: p.name };
 }
 
 export async function leagueMatches(env: Env, leagueId: number) {
   const p = getProvider(env);
-  const r = await cached(env, `league:${leagueId}`, p.limited ? 3 * 3600 : 30, () => p.leagueMatches(leagueId));
+  const r = await cached(env, `league:${leagueId}`, p.limited ? 3 * 3600 : 30, () => p.leagueMatches(leagueId), p.limited ? RETRY_SEC : 0);
   return { data: r.value, stale: r.stale, provider: p.name };
 }
 

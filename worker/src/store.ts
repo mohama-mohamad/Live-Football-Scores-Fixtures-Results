@@ -7,6 +7,13 @@ export class BudgetExceededError extends Error {
   }
 }
 
+// طلب فشل مؤخراً: لا نعيد المحاولة فوراً حتى لا يُستهلك الرصيد في حلقة
+export class RetryLaterError extends Error {
+  constructor() {
+    super('جارٍ تحديث البيانات، حاول بعد قليل');
+  }
+}
+
 export interface Cached<T> {
   value: T;
   fetchedAt: number;
@@ -64,12 +71,19 @@ export async function cached<T>(
   key: string,
   ttlSec: number | ((value: T) => number),
   load: () => Promise<T>,
+  // أقل مدة بين محاولتين لجلب نفس المفتاح (تُسجَّل المحاولة قبل الطلب، فتحمي حتى لو انقطعت المعالجة)
+  minRetrySec = 0,
 ): Promise<Cached<T>> {
   const now = Date.now();
   const row = await env.DB.prepare('SELECT value, fetched_at, expires_at FROM cache WHERE key = ?')
     .bind(key)
     .first<{ value: string; fetched_at: number; expires_at: number }>();
   if (row && row.expires_at > now) return { value: JSON.parse(row.value) as T, fetchedAt: row.fetched_at, stale: false };
+
+  if (minRetrySec > 0 && !inflight.has(key) && !(await claimInterval(env, `attempt:${key}`, minRetrySec * 1000, now))) {
+    if (row) return { value: JSON.parse(row.value) as T, fetchedAt: row.fetched_at, stale: true };
+    throw new RetryLaterError();
+  }
 
   try {
     let p = inflight.get(key) as Promise<T> | undefined;
@@ -125,6 +139,7 @@ export async function rateLimit(env: Env, bucket: string, limit: number, windowS
 export async function cleanup(env: Env, now = Date.now()): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM meta WHERE key LIKE 'rl:%' AND CAST(substr(key, 4, 10) AS INTEGER) < ?").bind(Math.floor(now / 1000) - 86400),
+    env.DB.prepare("DELETE FROM meta WHERE key LIKE 'attempt:%' AND CAST(value AS INTEGER) < ?").bind(now - 86_400_000),
     env.DB.prepare('DELETE FROM cache WHERE expires_at < ?').bind(now - 7 * 86_400_000),
     env.DB.prepare('DELETE FROM match_state WHERE kickoff < ?').bind(now - 3 * 86_400_000),
     env.DB.prepare('DELETE FROM usage WHERE day < ?').bind(utcDay(now - 30 * 86_400_000)),

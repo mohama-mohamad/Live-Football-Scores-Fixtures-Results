@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom';
-import { useMatches } from '../api/client';
+import { useMatches, useMeta } from '../api/client';
 import { DateStrip } from '../components/DateStrip';
 import { LeagueSection, groupByLeague, sortGroups } from '../components/LeagueSection';
 import { Empty, ErrorBox, Loading, StaleBanner } from '../components/States';
@@ -15,6 +15,8 @@ export function DayMatchesPage({ mode }: { mode: 'fixtures' | 'results' }) {
   const q = useMatches(date);
   const favTeams = useStore((s) => s.favTeams);
   const favLeagues = useStore((s) => s.favLeagues);
+  // عدد الأيام المتاحة حسب خطة البيانات (المجانية: أمس واليوم وغداً)
+  const span = Math.min(7, useMeta().data?.features?.dateWindow ?? 7);
 
   const set = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -30,7 +32,7 @@ export function DayMatchesPage({ mode }: { mode: 'fixtures' | 'results' }) {
 
   return (
     <>
-      <DateStrip value={date} onChange={(d) => set({ d })} from={mode === 'results' ? -7 : 0} to={mode === 'results' ? 0 : 7} reverse={mode === 'results'} />
+      <DateStrip value={date} onChange={(d) => set({ d })} from={mode === 'results' ? -span : 0} to={mode === 'results' ? 0 : span} reverse={mode === 'results'} />
       <div className="filter-row">
         <span className="day-title">{dayTitle(date)}</span>
         <div className="chips">

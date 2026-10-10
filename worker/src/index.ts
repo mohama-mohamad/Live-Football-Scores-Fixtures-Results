@@ -3,7 +3,7 @@
 import type { NotificationEvents, PushPrefs } from '../../shared/types';
 import { LEAGUES, LEAGUE_IDS } from '../../shared/leagues';
 import type { Env } from './env';
-import { BudgetExceededError, cleanup, rateLimit } from './store';
+import { BudgetExceededError, RetryLaterError, cleanup, rateLimit } from './store';
 import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
@@ -69,7 +69,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (method === 'GET' && path === '/api/meta') {
     const budget = await svc.budgetInfo(env);
-    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: (await svc.vapidKeys(env)).publicKey, ...budget }, 200, 'max-age=60');
+    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: (await svc.vapidKeys(env)).publicKey, features: svc.features(env), ...budget }, 200, 'max-age=60');
   }
 
   if (method === 'GET' && path === '/api/matches') {
@@ -77,7 +77,9 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     const tz = url.searchParams.get('tz') || 'UTC';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new HttpError(400, 'تاريخ غير صالح');
     if (!isValidTimeZone(tz)) throw new HttpError(400, 'منطقة زمنية غير صالحة');
-    if (Math.abs(Date.parse(date) - Date.now()) > 31 * 86_400_000) throw new HttpError(400, 'التاريخ خارج النطاق المتاح (شهر قبل وبعد)');
+    // نسمح بيوم إضافي لفروق التوقيت بين المناطق
+    const windowDays = svc.features(env).dateWindow;
+    if (Math.abs(Date.parse(date) - Date.now()) > (windowDays + 1) * 86_400_000) throw new HttpError(400, 'هذا التاريخ غير متاح في خطة البيانات الحالية');
     return envelope(await svc.matchesForLocalDate(env, date, tz), 'max-age=15');
   }
 
@@ -89,8 +91,9 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     return envelope(r, 'max-age=10');
   }
 
-  if (method === 'GET' && (m = path.match(/^\/api\/(standings|league)\/(\d+)/)) && !LEAGUE_IDS.has(Number(m[2]))) {
-    throw new HttpError(404, 'البطولة غير مدعومة');
+  if (method === 'GET' && (m = path.match(/^\/api\/(standings|league)\/(\d+)/))) {
+    if (!LEAGUE_IDS.has(Number(m[2]))) throw new HttpError(404, 'البطولة غير مدعومة');
+    if (!svc.features(env).standings) throw new HttpError(404, 'جداول الترتيب غير متاحة في خطة البيانات الحالية');
   }
 
   if (method === 'GET' && (m = path.match(/^\/api\/standings\/(\d+)$/))) {
@@ -159,6 +162,7 @@ export default {
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       if (e instanceof BudgetExceededError) return json({ error: e.message }, 429);
+      if (e instanceof RetryLaterError) return json({ error: e.message }, 503);
       if (e instanceof ProviderError) return json({ error: e.message }, e.status);
       console.error(e);
       return json({ error: 'حدث خطأ في الخادم' }, 500);

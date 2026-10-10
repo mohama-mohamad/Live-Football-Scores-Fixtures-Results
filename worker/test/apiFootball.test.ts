@@ -53,3 +53,33 @@ describe('API-Football normalization', () => {
     expect('stats' in list[0]).toBe(false);
   });
 });
+
+describe('extractTracked (large responses)', () => {
+  const big = (n: number, extraTail = '') => {
+    const items = Array.from({ length: n }, (_, i) => ({
+      ...fixture,
+      fixture: { ...fixture.fixture, id: 9000 + i },
+      league: { ...fixture.league, id: i % 10 === 0 ? 307 : 5000 + i },
+      events: [{ time: { elapsed: 1 }, team: { id: 1 }, type: 'Goal', detail: 'Normal Goal', player: { name: 'x ] y' } }],
+    }));
+    return JSON.stringify({ get: 'fixtures', parameters: { date: '2026-10-10' }, errors: [], results: n, paging: { current: 1, total: 1 }, response: items }) + extraTail;
+  };
+
+  it('matches a full parse and keeps only tracked leagues', async () => {
+    const { extractTracked } = await import('../src/providers/apiFootball');
+    const text = big(800);
+    expect(text.length).toBeGreaterThan(200_000);
+    const fast = extractTracked(text);
+    const full = JSON.parse(text).response.filter((f: { league: { id: number } }) => f.league.id === 307);
+    expect(fast).toEqual(full);
+    expect(fast).toHaveLength(80);
+  });
+
+  it('falls back to a full parse for unexpected layouts', async () => {
+    const { extractTracked } = await import('../src/providers/apiFootball');
+    // الحقل response ليس الأخير
+    const obj = JSON.parse(big(800));
+    const reordered = JSON.stringify({ response: obj.response, errors: [], tail: ['a]b'] });
+    expect(extractTracked(reordered)).toHaveLength(80);
+  });
+});

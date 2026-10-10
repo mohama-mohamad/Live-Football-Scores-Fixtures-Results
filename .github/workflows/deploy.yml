@@ -63,7 +63,7 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           [ -n "$ACCOUNT_ID" ] && export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
-          provider=mock; limit=100; poll=60
+          provider=mock; limit=100; poll=60; standings=true; window=31
           if [ -z "$API_FOOTBALL_KEY" ]; then
             echo "لا يوجد API_FOOTBALL_KEY — سيعمل التطبيق بالبيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -79,23 +79,33 @@ jobs:
               echo "⚠️ مفتاح API-Football غير صالح: $err — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
             else
               today=$(date -u +%F)
-              e1=$(api "/fixtures?date=$today" | errs)
-              season=$(api "/leagues?id=39&current=true" | jq -r '.response[0].seasons[0].year // empty' 2>/dev/null || true)
-              e2=$( [ -n "$season" ] && api "/standings?league=39&season=$season" | errs || echo "no season")
-              if [ -n "$e1$e2" ]; then
-                echo "::warning title=خطة API-Football لا تتيح البيانات الحالية::$e1 $e2"
-                echo "⚠️ خطة API-Football ($plan) لا تتيح مباريات اليوم أو الموسم الحالي: $e1 $e2 — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
+              e_live=$(api "/fixtures?live=39" | errs)
+              e_today=$(api "/fixtures?date=$today" | errs)
+              if [ -n "$e_live$e_today" ]; then
+                echo "::warning title=خطة API-Football لا تتيح المباريات الحالية::$e_live $e_today"
+                echo "⚠️ خطة API-Football ($plan) لا تتيح المباريات المباشرة أو مباريات اليوم: $e_live $e_today — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
               else
                 provider=api-football
+                # الترتيب يحتاج الموسم الحالي (غير متاح في الخطة المجانية)
+                season=$(api "/leagues?id=39&current=true" | jq -r '.response[0].seasons[0].year // empty' 2>/dev/null || true)
+                e_st=$( [ -n "$season" ] && api "/standings?league=39&season=$season" | errs || echo "no season")
+                [ -n "$e_st" ] && standings=false
+                # نطاق الأيام: هل يتاح ما بعد 3 أيام؟
+                e_far=$(api "/fixtures?date=$(date -u -d '+3 day' +%F)" | errs)
+                [ -n "$e_far" ] && window=1 || window=31
                 # 60% من الحد اليومي للمتابعة المباشرة، موزّعة على نحو 10 ساعات مباريات يومياً
                 poll=$(( 36000 * 10 / (limit * 6) ))
                 [ "$poll" -lt 60 ] && poll=60
                 echo "$API_FOOTBALL_KEY" | npx wrangler secret put API_FOOTBALL_KEY
-                echo "✅ بيانات حقيقية من API-Football — الخطة: $plan، الحد اليومي: $limit، التحديث المباشر كل $poll ثانية" >> "$GITHUB_STEP_SUMMARY"
+                {
+                  echo "✅ بيانات حقيقية من API-Football — الخطة: $plan، الحد اليومي: $limit"
+                  echo "- جداول الترتيب: $([ "$standings" = true ] && echo متاحة || echo 'غير متاحة في هذه الخطة')"
+                  echo "- الأيام المتاحة: $([ "$window" = 1 ] && echo 'أمس واليوم وغداً' || echo 'شهر قبل وبعد')"
+                } >> "$GITHUB_STEP_SUMMARY"
               fi
             fi
           fi
-          echo "DEPLOY_VARS=--var PROVIDER:$provider --var DAILY_REQUEST_LIMIT:$limit --var LIVE_POLL_SECONDS:$poll" >> "$GITHUB_ENV"
+          echo "DEPLOY_VARS=--var PROVIDER:$provider --var DAILY_REQUEST_LIMIT:$limit --var LIVE_POLL_SECONDS:$poll --var STANDINGS_ENABLED:$standings --var DATE_WINDOW_DAYS:$window" >> "$GITHUB_ENV"
 
       - name: Deploy worker + app
         working-directory: worker
