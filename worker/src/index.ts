@@ -8,6 +8,7 @@ import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
 import * as svc from './service';
+import { RELAY_MAX_AGE_MS, lastRelay, relayIngest, relayPlan, verifySignature, type RelayBody } from './relay';
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -68,9 +69,21 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
   const method = req.method;
   let m: RegExpMatchArray | null;
 
+  // ---------- وسيط API-Football (مهمة GitHub) ----------
+  if (method === 'GET' && path === '/api/__relay/plan') return json(await relayPlan(env));
+  if (method === 'POST' && path === '/api/__relay/ingest') {
+    if (!env.API_FOOTBALL_KEY) throw new HttpError(503, 'غير مفعّل');
+    const raw = await req.text();
+    if (raw.length > 3_000_000) throw new HttpError(413, 'كبير جداً');
+    if (!(await verifySignature(env.API_FOOTBALL_KEY, raw, req.headers.get('x-relay-signature') ?? ''))) throw new HttpError(403, 'توقيع غير صالح');
+    const body = JSON.parse(raw) as RelayBody;
+    if (!body.ts || Math.abs(Date.now() - body.ts) > RELAY_MAX_AGE_MS) throw new HttpError(400, 'طلب قديم');
+    return json(await relayIngest(env, body));
+  }
+
   if (method === 'GET' && path === '/api/meta') {
     const budget = await svc.budgetInfo(env);
-    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: (await svc.vapidKeys(env)).publicKey, features: svc.features(env), ...budget }, 200, 'max-age=60');
+    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: (await svc.vapidKeys(env)).publicKey, features: svc.features(env), relay: await lastRelay(env), ...budget }, 200, 'max-age=60');
   }
 
   if (method === 'GET' && path === '/api/matches') {

@@ -136,7 +136,7 @@ export function normFixture(f: Json): MatchDetails {
 }
 
 // القوائم لا تحتاج الإحصائيات والتشكيلات (لتقليل حجم التخزين)
-function slim(m: MatchDetails): Match {
+export function slim(m: MatchDetails): Match {
   const { stats: _s, lineups: _l, ...rest } = m;
   return rest;
 }

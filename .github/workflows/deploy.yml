@@ -127,7 +127,7 @@ jobs:
               echo "::warning title=مفتاح football-data.org غير صالح::HTTP $code $(jq -r '.message // empty' /tmp/fd.json 2>/dev/null)"
             fi
           fi
-          echo "DEPLOY_VARS=--var PROVIDER:$provider --var DAILY_REQUEST_LIMIT:$limit --var LIVE_POLL_SECONDS:$poll --var STANDINGS_ENABLED:$standings --var DATE_WINDOW_DAYS:$window" >> "$GITHUB_ENV"
+          echo "DEPLOY_VARS=--var PROVIDER:$provider --var DAILY_REQUEST_LIMIT:$limit --var LIVE_POLL_SECONDS:$poll --var STANDINGS_ENABLED:$standings --var DATE_WINDOW_DAYS:$window --var AF_VIA_RELAY:$([ "$provider" = api-football ] && echo true || echo false)" >> "$GITHUB_ENV"
 
       - name: Deploy worker + app
         working-directory: worker

@@ -6,7 +6,7 @@ import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
-import { BudgetExceededError, budgetCap, cached, type Cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
+import { BudgetExceededError, RetryLaterError, budgetCap, cached, type Cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
 import { computePlan, matchWindow, type LivePlan, type TimeWindow } from './plan';
 import {
   FD_MATCH_OFFSET,
@@ -26,7 +26,21 @@ import { diffMatch, type Notice } from './notify';
 import { generateVapidKeys, sendPush, type VapidKeys } from './push/webpush';
 
 // purpose: من أي حصة يُخصم الطلب (التصفح أو المتابعة المباشرة)
+// وضع الوسيط: لا اتصال مباشر بـ API-Football (يرفض Cloudflare)؛ البيانات تصل عبر مهمة GitHub
+const relayOnly = (env: Env) => env.AF_VIA_RELAY === 'true';
+const RELAY_PROVIDER: Provider = {
+  name: 'api-football',
+  limited: true,
+  matchesByUtcDate: () => Promise.reject(new RetryLaterError()),
+  live: () => Promise.reject(new RetryLaterError()),
+  matchesByIds: () => Promise.reject(new RetryLaterError()),
+  match: () => Promise.reject(new RetryLaterError()),
+  standings: () => Promise.reject(new RetryLaterError()),
+  leagueMatches: () => Promise.reject(new RetryLaterError()),
+};
+
 export function getProvider(env: Env, purpose: BudgetPurpose = 'browse'): Provider {
+  if (env.PROVIDER === 'api-football' && relayOnly(env)) return RELAY_PROVIDER;
   if (env.PROVIDER === 'api-football') {
     if (!env.API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY غير مضبوط');
     return new ApiFootballProvider(env.API_FOOTBALL_KEY, {
@@ -101,7 +115,7 @@ function sortMatches(list: Match[]): Match[] {
 }
 
 // مدة صلاحية قائمة مباريات يوم UTC (بالثواني)
-function dateTtl(p: Provider, date: string, now: number): number {
+export function dateTtl(p: Provider, date: string, now: number): number {
   if (!p.limited) return 15;
   const diffDays = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${utcDate(now)}T00:00:00Z`)) / DAY_MS);
   if (diffDays < -1) return 7 * 86400;
@@ -133,7 +147,7 @@ interface StateRow {
   updated_at: number;
 }
 
-async function loadStates(env: Env, ids: number[]): Promise<Map<number, { match: Match; updatedAt: number }>> {
+export async function loadStates(env: Env, ids: number[]): Promise<Map<number, { match: Match; updatedAt: number }>> {
   const out = new Map<number, { match: Match; updatedAt: number }>();
   for (let i = 0; i < ids.length; i += 90) {
     const chunk = ids.slice(i, i + 90);
@@ -227,6 +241,13 @@ export async function matchDetails(env: Env, id: number) {
     const s = (await loadStates(env, [id])).get(id);
     if (data && s && s.updatedAt > r.fetchedAt) data = { ...data, ...s.match };
     return { data, stale: r.stale, provider: 'football-data' };
+  }
+  if (relayOnly(env) && p.limited) {
+    const s = (await loadStates(env, [id])).get(id);
+    if (s) return { data: s.match as MatchDetails, stale: false, provider: p.name };
+    const row = await env.DB.prepare(`SELECT value FROM cache WHERE key LIKE 'date:%' AND instr(value, ?1) > 0 LIMIT 1`).bind(`{"id":${id},`).first<{ value: string }>();
+    const m = row ? (JSON.parse(row.value) as Match[]).find((x) => x.id === id) : undefined;
+    return { data: (m as MatchDetails) ?? null, stale: false, provider: p.name };
   }
   const r = await cached<MatchDetails | null>(
     env,
@@ -341,7 +362,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
 type OpenRow = { id: number; snapshot: string };
 
 // يكتب الحالات الجديدة ويُرجع التنبيهات الناتجة عن التغيّر
-async function applyUpdates(env: Env, updates: Match[], now: number, extra: D1PreparedStatement[] = []): Promise<Notice[]> {
+export async function applyUpdates(env: Env, updates: Match[], now: number, extra: D1PreparedStatement[] = []): Promise<Notice[]> {
   const prevStates = await loadStates(env, updates.map((m) => m.id));
   const notices: Notice[] = [];
   const writes: D1PreparedStatement[] = [...extra];
@@ -398,7 +419,19 @@ async function refreshSecondary(env: Env, now: number): Promise<RefreshResult> {
     const liveIds = new Set(live.map((m) => m.id));
     const gone = openRows.map((r) => r.id).filter((id) => !liveIds.has(id));
     const finals = gone.length ? await secondaryByIds(env, gone) : [];
-    const notices = await applyUpdates(env, [...live, ...finals], now, [env.DB.prepare("DELETE FROM meta WHERE key = 'fd_error'")]);
+    // نحتفظ بالأحداث القادمة من API-Football (عبر الوسيط)، ولا نُنقص نتيجة سجّلها مصدر أسرع
+    const stored = await loadStates(env, [...live, ...finals].map((m) => m.id));
+    const merged = [...live, ...finals].map((m) => {
+      const s = stored.get(m.id)?.match;
+      if (!s) return m;
+      const pick = (x: number | null, y: number | null) => (x == null ? y : y == null ? x : Math.max(x, y));
+      return {
+        ...m,
+        events: s.events?.length ? s.events : m.events,
+        score: m.status === 'finished' ? m.score : { home: pick(m.score.home, s.score.home), away: pick(m.score.away, s.score.away) },
+      };
+    });
+    const notices = await applyUpdates(env, merged, now, [env.DB.prepare("DELETE FROM meta WHERE key = 'fd_error'")]);
     return { polled: true, notices };
   } catch (e) {
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -445,6 +478,8 @@ async function refreshPrimary(env: Env, p: Provider, now: number): Promise<Refre
     await setMeta(env, 'live_plan', JSON.stringify(plan));
     if (plan.mode === 'idle') return { polled: false, reason: 'no-matches', notices: [] };
     if (plan.mode === 'budget') return { polled: false, reason: 'budget', notices: [] };
+    // المتابعة تتم عبر مهمة GitHub (انظر relay.ts)
+    if (relayOnly(env)) return { polled: false, reason: 'relay', notices: [] };
     intervalMs = (plan.mode === 'fast' ? plan.fastSec : plan.slowSec) * 1000;
   }
   if (!(await claimInterval(env, 'live_poll', intervalMs - 2000, now))) return { polled: false, reason: 'interval', notices: [] };

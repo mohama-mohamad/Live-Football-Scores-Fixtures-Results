@@ -11,7 +11,9 @@ export interface Env {
   DATE_WINDOW_DAYS?: string; // عدد الأيام المتاحة قبل وبعد اليوم
   // أسرار اختيارية (wrangler secret put ...). مفاتيح VAPID تُولَّد تلقائياً إن لم تُضبط
   API_FOOTBALL_KEY?: string;
-  FOOTBALL_DATA_KEY?: string; // مزوّد ثانٍ اختياري: جداول الترتيب ومباريات الأيام القادمة
+  FOOTBALL_DATA_KEY?: string;
+  // "true": لا يتصل الخادم بـ API-Football مباشرة (مرفوض من Cloudflare)؛ تصله البيانات عبر مهمة GitHub (af-relay)
+  AF_VIA_RELAY?: string; // مزوّد ثانٍ اختياري: جداول الترتيب ومباريات الأيام القادمة
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
 }

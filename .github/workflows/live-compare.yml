@@ -19,5 +19,5 @@ jobs:
               | jq -r '.response[] | "AF  \(.teams.home.name) \(.goals.home)-\(.goals.away) \(.teams.away.name)  [\(.fixture.status.short) \(.fixture.status.elapsed)'"'"']"'
             curl -s -H "X-Auth-Token: $FD" 'https://api.football-data.org/v4/matches?status=IN_PLAY,PAUSED,LIVE' \
               | jq -r '.matches[] | "FD  \(.homeTeam.shortName) \(.score.fullTime.home)-\(.score.fullTime.away) \(.awayTeam.shortName)  [\(.status) minute=\(.minute // "-") updated=\(.lastUpdated)]"'
-            [ $round = 1 ] && sleep 150
+            if [ $round = 1 ]; then sleep 150; fi
           done
