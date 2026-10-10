@@ -7,6 +7,9 @@
   // تشغيل الـ Worker قرب أوروبا الغربية: طلبات API-Football من بعض مراكز Cloudflare (مثل BOM)
   // تُرفض لأن عناوينها مشتركة بين كثير من المستخدمين
   "placement": { "region": "aws:eu-west-3" },
+  // ربط الـ Worker بنفسه: المهمة الدورية تستدعي نفسها عبره فتعمل في الموقع المحدد أعلاه
+  // (إعداد placement لا ينطبق على المهمة الدورية مباشرة)
+  "services": [{ "binding": "SELF", "service": "koora-live" }],
   "compatibility_date": "2026-09-01",
   "assets": {
     "directory": "../app/dist",

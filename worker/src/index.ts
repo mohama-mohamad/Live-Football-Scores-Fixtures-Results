@@ -3,7 +3,7 @@
 import type { NotificationEvents, PushPrefs } from '../../shared/types';
 import { LEAGUES, LEAGUE_IDS } from '../../shared/leagues';
 import type { Env } from './env';
-import { BudgetExceededError, RetryLaterError, cleanup, ensureProvider, rateLimit } from './store';
+import { BudgetExceededError, RetryLaterError, cleanup, ensureProvider, getMeta, rateLimit } from './store';
 import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
@@ -154,9 +154,33 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
   throw new HttpError(404, 'غير موجود');
 }
 
+// رمز سري عشوائي للمسار الداخلي (يُولَّد مرة ويُحفظ في D1)
+async function internalToken(env: Env): Promise<string> {
+  const existing = await getMeta(env, 'internal_token');
+  if (existing) return existing;
+  const token = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  await env.DB.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').bind('internal_token', token).run();
+  return (await getMeta(env, 'internal_token'))!;
+}
+
+const INTERNAL_POLL = '/api/__internal/poll';
+
+// تحديث المباريات المباشرة وإرسال التنبيهات
+async function pollAndNotify(env: Env): Promise<Record<string, unknown>> {
+  await ensureProvider(env);
+  const res = await svc.refreshLive(env);
+  const stats = res.notices.length ? await svc.dispatch(env, res.notices) : null;
+  if (stats) console.log('notices', res.notices.length, stats);
+  return { polled: res.polled, reason: res.reason, notices: res.notices.length, stats };
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === INTERNAL_POLL) {
+      if (req.method !== 'POST' || req.headers.get('x-internal-token') !== (await internalToken(env))) return json({ error: 'غير مسموح' }, 403);
+      return json({ ...(await pollAndNotify(env)), colo: (req as { cf?: { colo?: string } }).cf?.colo });
+    }
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     try {
       await ensureProvider(env);
@@ -172,12 +196,18 @@ export default {
   },
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    await ensureProvider(env);
-    const res = await svc.refreshLive(env);
-    if (res.notices.length) {
-      const stats = await svc.dispatch(env, res.notices);
-      console.log('notices', res.notices.length, stats);
+    // نستدعي أنفسنا عبر SELF حتى يعمل التحديث في الموقع المحدد (placement) لا في موقع المهمة الدورية
+    let done = false;
+    if (env.SELF) {
+      try {
+        const r = await env.SELF.fetch(`https://koora-live.internal${INTERNAL_POLL}`, { method: 'POST', headers: { 'x-internal-token': await internalToken(env) } });
+        done = r.ok;
+        if (!r.ok) console.warn('self poll failed', r.status, await r.text());
+      } catch (e) {
+        console.warn('self poll error', e);
+      }
     }
+    if (!done) await pollAndNotify(env);
     // تنظيف البيانات القديمة مرة كل ساعة تقريباً
     if (new Date().getUTCMinutes() === 7) ctx.waitUntil(cleanup(env));
   },

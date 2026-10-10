@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
+  SELF?: Fetcher; // ربط الـ Worker بنفسه (انظر wrangler.jsonc)
   PROVIDER: string;
   DAILY_REQUEST_LIMIT: string;
   LIVE_POLL_SECONDS: string;
