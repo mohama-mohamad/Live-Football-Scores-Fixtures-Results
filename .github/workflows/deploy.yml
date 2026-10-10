@@ -79,7 +79,7 @@ jobs:
               echo "⚠️ مفتاح API-Football غير صالح: $err — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
             else
               today=$(date -u +%F)
-              e_live=$(api "/fixtures?live=39" | errs)
+              e_live=$(api "/fixtures?live=39-140-307" | errs)
               e_today=$(api "/fixtures?date=$today" | errs)
               if [ -n "$e_live$e_today" ]; then
                 echo "::warning title=خطة API-Football لا تتيح المباريات الحالية::$e_live $e_today"
