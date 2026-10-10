@@ -1,0 +1,34 @@
+# فحص يدوي لما تتيحه خطة football-data.org (نحو 10 طلبات، مع فواصل لاحترام حد الدقيقة)
+name: football-data.org plan check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe endpoints
+        env:
+          KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          [ -n "$KEY" ] || { echo "::error::FOOTBALL_DATA_KEY غير موجود"; exit 1; }
+          api() { curl -s -D /tmp/h -H "X-Auth-Token: $KEY" "https://api.football-data.org/v4$1"; sleep 7; }
+          left() { grep -i 'x-requests-available-minute' /tmp/h | tr -d '\r'; }
+          r=$(api /competitions); left
+          echo "$r" | jq -r '"competitions: " + ([.competitions[]? | "\(.code)=\(.id)(\(.plan))"] | join(" ")) + " message=\(.message // "")"'
+          r=$(api /competitions/PL/standings); left
+          echo "$r" | jq -r '"PL standings: season=\(.season.startDate) groups=\(.standings|length) rows=\(.standings[0].table|length) message=\(.message // "")"'
+          echo "$r" | jq -c '.standings[0].table[0]'
+          from=$(date -u -d '+2 day' +%F); to=$(date -u -d '+5 day' +%F)
+          r=$(api "/matches?dateFrom=$from&dateTo=$to"); left
+          export from to
+          echo "$r" | jq -r '"matches \($ENV.from)..\($ENV.to): count=\(.resultSet.count // (.matches|length)) comps=\([.matches[]?.competition.code] | unique | join(",")) message=\(.message // "")"' 
+          echo "$r" | jq -c '.matches[0] | {id, utcDate, status, matchday, stage, homeTeam, awayTeam, score, competition: .competition.code, referees}'
+          y=$(date -u -d '-1 day' +%F)
+          r=$(api "/matches?dateFrom=$y&dateTo=$y"); left
+          echo "$r" | jq -r '"yesterday: count=\(.matches|length) statuses=\([.matches[]?.status] | unique | join(","))"'
+          for c in PL PD SA BL1 FL1 CL; do
+            r=$(api "/competitions/$c/teams"); left
+            echo "== $c teams"; echo "$r" | jq -r '[.teams[]? | "\(.id)|\(.name)|\(.shortName)|\(.tla)"] | join(" ; ")'
+          done
