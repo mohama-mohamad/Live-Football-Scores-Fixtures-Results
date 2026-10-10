@@ -5,7 +5,7 @@ export interface Env {
   DAILY_REQUEST_LIMIT: string;
   LIVE_POLL_SECONDS: string;
   VAPID_SUBJECT: string;
-  // أسرار (wrangler secret put ...)
+  // أسرار اختيارية (wrangler secret put ...). مفاتيح VAPID تُولَّد تلقائياً إن لم تُضبط
   API_FOOTBALL_KEY?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;

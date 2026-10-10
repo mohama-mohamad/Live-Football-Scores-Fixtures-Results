@@ -83,3 +83,14 @@ describe('sendPush', () => {
     expect(h.Topic).toBe('match-1');
   });
 });
+
+describe('generateVapidKeys', () => {
+  it('produces keys usable for signing', async () => {
+    const { generateVapidKeys } = await import('../src/push/webpush');
+    const k = await generateVapidKeys();
+    expect(b64urlDecode(k.publicKey)).toHaveLength(65);
+    expect(b64urlDecode(k.privateKey)).toHaveLength(32);
+    const header = await vapidAuthorization('https://fcm.googleapis.com/x', { ...k, subject: 'mailto:a@b.c' });
+    expect(header).toContain(`k=${k.publicKey}`);
+  });
+});

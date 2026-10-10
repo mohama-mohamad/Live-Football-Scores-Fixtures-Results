@@ -5,10 +5,10 @@ import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
-import { cached, claimInterval, consumeBudget, dailyLimit, usageToday } from './store';
+import { cached, claimInterval, consumeBudget, dailyLimit, getMeta, usageToday } from './store';
 import { DAY_MS, localDayRange, utcDate, utcDatesCovering } from './time';
 import { diffMatch, type Notice } from './notify';
-import { sendPush, type VapidKeys } from './push/webpush';
+import { generateVapidKeys, sendPush, type VapidKeys } from './push/webpush';
 
 export function getProvider(env: Env): Provider {
   if (env.PROVIDER === 'api-football') {
@@ -225,9 +225,22 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env), now 
 
 // ---------- إرسال التنبيهات ----------
 
-export function vapidKeys(env: Env): VapidKeys | null {
-  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return null;
-  return { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || 'mailto:admin@example.com' };
+// مفاتيح VAPID: من الأسرار إن وُجدت، وإلا تُولَّد تلقائياً مرة واحدة وتُحفظ في D1
+let cachedKeys: VapidKeys | null = null;
+export async function vapidKeys(env: Env): Promise<VapidKeys> {
+  const subject = env.VAPID_SUBJECT || 'mailto:admin@example.com';
+  if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) return { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject };
+  if (cachedKeys) return { ...cachedKeys, subject };
+  let stored = await getMeta(env, 'vapid_keys');
+  if (!stored) {
+    const generated = await generateVapidKeys();
+    // INSERT OR IGNORE: إن سبقتنا نسخة أخرى نستخدم مفاتيحها
+    await env.DB.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').bind('vapid_keys', JSON.stringify(generated)).run();
+    stored = await getMeta(env, 'vapid_keys');
+  }
+  const k = JSON.parse(stored!) as { publicKey: string; privateKey: string };
+  cachedKeys = { ...k, subject };
+  return cachedKeys;
 }
 
 interface SubRow {
@@ -244,9 +257,9 @@ export function wants(prefs: PushPrefs, n: Notice): boolean {
 }
 
 export async function dispatch(env: Env, notices: Notice[]): Promise<{ sent: number; failed: number; removed: number }> {
-  const keys = vapidKeys(env);
   const stats = { sent: 0, failed: 0, removed: 0 };
-  if (!keys || !notices.length) return stats;
+  if (!notices.length) return stats;
+  const keys = await vapidKeys(env);
   const { results } = await env.DB.prepare('SELECT endpoint, p256dh, auth, prefs FROM subscriptions').all<SubRow>();
   const jobs: { sub: SubRow; n: Notice }[] = [];
   for (const sub of results) {

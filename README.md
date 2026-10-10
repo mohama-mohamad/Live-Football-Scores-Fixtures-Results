@@ -59,7 +59,6 @@ shared/    أنواع مشتركة + أسماء البطولات والفرق ب
 
 ```bash
 npm install
-npm run vapid --workspace worker -- --dev      # مفاتيح التنبيهات للتجربة المحلية (worker/.dev.vars)
 npm run db:migrate:local --workspace worker    # إنشاء الجداول محلياً
 npm run dev                                    # يبني التطبيق ثم يشغّل الخادم (8787) و Vite (5173)
 ```
@@ -75,23 +74,31 @@ npm run typecheck
 
 ## النشر على Cloudflare (مجاناً)
 
+### النشر التلقائي عبر GitHub Actions (الطريقة المعتمدة)
+
+قاعدة البيانات `koora-live` (D1) جاهزة في حساب Cloudflare. عند كل دفع (push) إلى الفرع يبني ملف `.github/workflows/deploy.yml` التطبيق، ويشغّل الاختبارات، ويحدّث قاعدة البيانات، ثم ينشر.
+مفاتيح التنبيهات (VAPID) يولّدها الخادم تلقائياً عند أول تشغيل ويحفظها في قاعدة البيانات.
+
+المطلوب مرة واحدة فقط هو **سر واحد**:
+
+1. أنشئ توكن من [Cloudflare › API Tokens](https://dash.cloudflare.com/profile/api-tokens):
+   **Create Token** ← قالب **Edit Cloudflare Workers** ← أضف صلاحية **Account › D1 › Edit** ← **Create Token**، ثم انسخه.
+2. أضفه في GitHub من [Settings › Secrets › Actions](https://github.com/mohama-mohamad/Live-Football-Scores-Fixtures-Results/settings/secrets/actions/new):
+   الاسم `CLOUDFLARE_API_TOKEN` والقيمة هي التوكن.
+3. شغّل النشر من تبويب **Actions** ← **Deploy to Cloudflare** ← **Run workflow**، أو بأي push.
+
+يظهر رابط التطبيق (`https://koora-live.<حسابك>.workers.dev`) في ملخص التشغيل.
+
+> إن كان التوكن يصل لأكثر من حساب Cloudflare، أضف أيضاً السر `CLOUDFLARE_ACCOUNT_ID`.
+
+### النشر اليدوي من جهازك
+
 ```bash
 cd worker
 npx wrangler login
-npx wrangler d1 create football          # انسخ database_id الناتج إلى wrangler.jsonc
 npm run db:migrate:remote
-
-npm run vapid                             # يطبع مفتاحَي VAPID
-npx wrangler secret put VAPID_PUBLIC_KEY
-npx wrangler secret put VAPID_PRIVATE_KEY
-
-cd .. && npm run deploy                   # يبني التطبيق وينشره مع الخادم
+cd .. && npm run deploy
 ```
-
-ستحصل على رابط مثل `https://koora-live.<حسابك>.workers.dev`، وهو رابط التطبيق الذي تفتحه على الآيفون.
-
-قبل النشر عدّل في `worker/wrangler.jsonc`:
-- `VAPID_SUBJECT`: بريدك الإلكتروني بصيغة `mailto:you@example.com`، فخدمة Apple تشترطه.
 
 ### تفعيل البيانات الحقيقية (API-Football)
 

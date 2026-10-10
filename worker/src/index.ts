@@ -66,7 +66,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (method === 'GET' && path === '/api/meta') {
     const budget = await svc.budgetInfo(env);
-    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null, ...budget }, 200, 'max-age=60');
+    return json({ provider: svc.getProvider(env).name, leagues: LEAGUES, vapidPublicKey: (await svc.vapidKeys(env)).publicKey, ...budget }, 200, 'max-age=60');
   }
 
   if (method === 'GET' && path === '/api/matches') {
@@ -95,7 +95,6 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // ---------- التنبيهات ----------
   if (method === 'POST' && path === '/api/push/subscribe') {
-    if (!svc.vapidKeys(env)) throw new HttpError(503, 'التنبيهات غير مفعّلة على الخادم (مفاتيح VAPID مفقودة)');
     const body = await readJson(req);
     const sub = parseSubscription(body.subscription);
     const prefs = sanitizePrefs(body.prefs);
@@ -116,8 +115,7 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
   }
 
   if (method === 'POST' && path === '/api/push/test') {
-    const keys = svc.vapidKeys(env);
-    if (!keys) throw new HttpError(503, 'التنبيهات غير مفعّلة على الخادم');
+    const keys = await svc.vapidKeys(env);
     const body = await readJson(req);
     const sub = await env.DB.prepare('SELECT endpoint, p256dh, auth FROM subscriptions WHERE endpoint = ?')
       .bind(String(body.endpoint ?? ''))

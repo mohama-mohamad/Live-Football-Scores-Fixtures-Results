@@ -80,6 +80,14 @@ export async function vapidAuthorization(endpoint: string, keys: VapidKeys, nowS
   return `vapid t=${unsigned}.${b64urlEncode(sig)}, k=${keys.publicKey}`;
 }
 
+// يولّد زوج مفاتيح VAPID جديداً (P-256)
+export async function generateVapidKeys(): Promise<{ publicKey: string; privateKey: string }> {
+  const pair = (await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as CryptoKeyPair;
+  const jwk = (await crypto.subtle.exportKey('jwk', pair.privateKey)) as JsonWebKey;
+  const pub = concat(new Uint8Array([4]), b64urlDecode(jwk.x!), b64urlDecode(jwk.y!));
+  return { publicKey: b64urlEncode(pub), privateKey: jwk.d! };
+}
+
 // ---------- التشفير aes128gcm ----------
 
 export async function encryptPayload(

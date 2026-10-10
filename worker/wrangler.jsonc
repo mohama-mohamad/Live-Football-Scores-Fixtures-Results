@@ -3,6 +3,7 @@
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "koora-live",
   "main": "src/index.ts",
+  "workers_dev": true,
   "compatibility_date": "2026-09-01",
   "assets": {
     "directory": "../app/dist",
@@ -15,9 +16,9 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "football",
-      // ضع هنا المعرّف الناتج عن: npx wrangler d1 create football
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "koora-live",
+      // قاعدة بيانات D1 في حساب Cloudflare (أُنشئت مسبقاً)
+      "database_id": "980f0da1-b901-4ccd-8cec-ea8391030f79",
       "migrations_dir": "migrations"
     }
   ],
@@ -28,8 +29,8 @@
     "DAILY_REQUEST_LIMIT": "100",
     // أقل فاصل بالثواني بين كل فحص للمباريات المباشرة
     "LIVE_POLL_SECONDS": "60",
-    // بريدك أو رابط موقعك (مطلوب لخدمة تنبيهات Apple)
-    "VAPID_SUBJECT": "mailto:admin@example.com"
+    // وسيلة تواصل لخدمات التنبيهات (Apple/Google): بريد mailto: أو رابط https:
+    "VAPID_SUBJECT": "https://github.com/mohama-mohamad/Live-Football-Scores-Fixtures-Results"
   },
   "observability": { "enabled": true }
 }
