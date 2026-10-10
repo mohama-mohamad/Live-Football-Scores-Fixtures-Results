@@ -320,9 +320,14 @@ function stripSuffixes(n: string): string {
 }
 
 const DICT = new Map<string, string>();
+const arCount = new Map<string, number>();
 for (const [keys, ar] of Object.entries(RAW)) {
   for (const k of keys.split('|')) DICT.set(normalizeName(k), ar);
+  arCount.set(ar, (arCount.get(ar) ?? 0) + 1);
 }
+
+// أسماء عربية يحملها أكثر من فريق (مثل «الأهلي» السعودي والمصري): لا تصلح للمطابقة بالاسم
+export const isAmbiguousKey = (key: string) => (arCount.get(key) ?? 0) > 1;
 
 // هل يوجد اسم عربي لهذا الفريق؟
 function lookup(name?: string): string | undefined {

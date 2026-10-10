@@ -1,6 +1,6 @@
 // مزوّد API-Football (api-sports.io) — https://www.api-football.com/documentation-v3
 import type { EventType, Lineup, Match, MatchDetails, MatchEvent, MatchStatus, StatPair, Standings } from '../../../shared/types';
-import { LEAGUE_IDS, LEAGUES } from '../../../shared/leagues';
+import { LEAGUE_IDS } from '../../../shared/leagues';
 import { ProviderError, type Provider } from './types';
 
 const BASE = 'https://v3.football.api-sports.io';
@@ -155,14 +155,14 @@ function parseEnvelope(text: string): Json[] {
 }
 
 const MARKER = '{"fixture":';
-const tracked = (list: Json[]) => list.filter((f) => LEAGUE_IDS.has(Number(f.league?.id)));
+const tracked = (list: Json[], leagues: Set<number>) => list.filter((f) => leagues.has(Number(f.league?.id)));
 
 // يستخرج مباريات الدوريات المتابَعة من رد كبير دون تحليل النص كاملاً:
 // نقسم النص عند بداية كل مباراة، نقرأ معرّف الدوري، ونحلّل المباريات المطلوبة فقط.
 // تحليل 1.5MB كاملاً يقارب حد المعالجة في خطة Cloudflare المجانية (10ms).
-export function extractTracked(text: string): Json[] {
+export function extractTracked(text: string, leagues: Set<number> = LEAGUE_IDS): Json[] {
   const start = text.indexOf('"response":[');
-  if (text.length < 200_000 || start < 0) return tracked(parseEnvelope(text));
+  if (text.length < 200_000 || start < 0) return tracked(parseEnvelope(text), leagues);
   const parts = text.slice(start + 12).split(MARKER);
   const out: Json[] = [];
   try {
@@ -170,7 +170,7 @@ export function extractTracked(text: string): Json[] {
       const p = parts[i];
       const k = p.indexOf('"league":{"id":');
       if (k < 0) throw new Error('format');
-      if (!LEAGUE_IDS.has(parseInt(p.slice(k + 15, k + 27), 10))) continue;
+      if (!leagues.has(parseInt(p.slice(k + 15, k + 27), 10))) continue;
       const last = i === parts.length - 1;
       // آخر مباراة يتبعها "]" ثم بقية الغلاف؛ غيرها تنتهي بفاصلة
       const body = last ? p.slice(0, p.lastIndexOf(']')) : p.replace(/,\s*$/, '');
@@ -178,7 +178,7 @@ export function extractTracked(text: string): Json[] {
     }
   } catch {
     // صيغة غير متوقعة: نعود للتحليل الكامل
-    return tracked(parseEnvelope(text));
+    return tracked(parseEnvelope(text), leagues);
   }
   return out;
 }
@@ -194,6 +194,8 @@ export class ApiFootballProvider implements Provider {
       onRequest?: () => Promise<void>;
       // ذاكرة مؤقتة للقيم التي نادراً ما تتغير (مثل الموسم الحالي)
       memo?: <T>(key: string, ttlSec: number, fn: () => Promise<T>) => Promise<T>;
+      // الدوريات التي يخدمها هذا المزوّد (افتراضياً كل الدوريات المتابَعة)
+      leagues?: number[];
     } = {},
     // ملاحظة: في Workers يجب ألا يُستدعى fetch كدالة على كائن آخر (Illegal invocation)، لذلك نغلّفه
     private fetcher: typeof fetch = (input, init) => fetch(input, init),
@@ -219,6 +221,10 @@ export class ApiFootballProvider implements Provider {
     return text;
   }
 
+  private get leagues(): Set<number> {
+    return this.hooks.leagues?.length ? new Set(this.hooks.leagues) : LEAGUE_IDS;
+  }
+
   // آخر ترويسات حدود عند الرفض (تُضاف لرسالة الخطأ)
   lastLimits = '';
   lastColo = '';
@@ -236,11 +242,12 @@ export class ApiFootballProvider implements Provider {
   async matchesByUtcDate(date: string): Promise<Match[]> {
     // قائمة اليوم كبيرة جداً (~1.5MB لكل دوريات العالم): نستخرج دورياتنا فقط دون تحليل الكل
     const text = await this.fetchText('/fixtures', { date, timezone: 'UTC' });
-    return extractTracked(text).map((f) => slim(normFixture(f)));
+    return extractTracked(text, this.leagues).map((f) => slim(normFixture(f)));
   }
 
   async live(): Promise<Match[]> {
-    const ids = LEAGUES.map((l) => l.id).join('-');
+    // يجب أكثر من معرّف (صيغة id-id)؛ معرّف واحد يُرفض
+    const ids = [...this.leagues].join('-');
     const list = await this.get('/fixtures', { live: ids });
     return list.map((f) => slim(normFixture(f)));
   }

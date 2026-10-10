@@ -1,7 +1,7 @@
 // حالة محلية محفوظة في الجهاز: المفضلة والإعدادات
 import { useSyncExternalStore } from 'react';
 import type { NotificationEvents, Team } from '../../../shared/types';
-import { SECONDARY_TEAM_OFFSET, teamKey } from '../../../shared/teams';
+import { isAmbiguousKey, teamKey } from '../../../shared/teams';
 
 export interface Settings {
   theme: 'auto' | 'light' | 'dark';
@@ -76,9 +76,11 @@ export function useStore<T>(select: (s: State) => T): T {
   return useSyncExternalStore(subscribe, () => select(state));
 }
 
-// هل الفريق في المفضلة؟ بالمعرّف، أو بالاسم لفرق أُضيفت من football-data.org (معرّفاتها مختلفة)
+// هل الفريق في المفضلة؟ بالمعرّف، أو بالاسم (المعرّفات تختلف بين مصدري البيانات)
+// ما عدا الأسماء المشتركة بين أكثر من فريق
 export function isFavTeam(favs: Team[], team: Team): boolean {
-  return favs.some((f) => f.id === team.id || (f.id >= SECONDARY_TEAM_OFFSET && teamKey(f.name, f.short) === teamKey(team.name, team.short)));
+  const key = teamKey(team.name, team.short);
+  return favs.some((f) => f.id === team.id || (!isAmbiguousKey(key) && teamKey(f.name, f.short) === key));
 }
 
 export function toggleTeam(team: Team) {

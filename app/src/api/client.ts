@@ -30,6 +30,7 @@ export interface Meta {
   limit: number | null;
   pollSeconds: number;
   favPollSeconds: number;
+  secondaryPollSeconds?: number | null;
   features: { standings: boolean; standingsLeagues?: number[]; afWindow?: number; dateWindow: number; secondary?: boolean };
 }
 

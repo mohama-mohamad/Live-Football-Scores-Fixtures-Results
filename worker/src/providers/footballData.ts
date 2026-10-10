@@ -105,6 +105,20 @@ export class FootballDataClient {
       .filter(isMatch);
   }
 
+  // المباريات الجارية الآن في البطولات المدعومة
+  async live(): Promise<Match[]> {
+    const body = await this.get('/matches?status=IN_PLAY,PAUSED,EXTRA_TIME,PENALTY_SHOOTOUT,LIVE');
+    return (body.matches ?? []).map(normFdMatch).filter(isMatch);
+  }
+
+  // مباريات بمعرّفاتنا (المُزاحة) — لمعرفة نتيجة مباراة اختفت من قائمة المباشر
+  async matchesByIds(ids: number[]): Promise<Match[]> {
+    const raw = ids.map((id) => id - FD_MATCH_OFFSET).filter((id) => id > 0);
+    if (!raw.length) return [];
+    const body = await this.get(`/matches?ids=${raw.join(',')}`);
+    return (body.matches ?? []).map(normFdMatch).filter(isMatch);
+  }
+
   async competitionMatches(leagueId: number, from: string, to: string): Promise<Match[]> {
     const code = FD_CODES[leagueId];
     if (!code) return [];

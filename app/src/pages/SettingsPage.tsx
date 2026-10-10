@@ -196,6 +196,12 @@ export function SettingsPage() {
           <span className="muted">تحديث مباريات فرقك المفضلة</span>
           <span>{meta.data ? every(meta.data.favPollSeconds) : '…'}</span>
         </div>
+        {meta.data?.secondaryPollSeconds ? (
+          <div className="info-row">
+            <span className="muted">البطولات الأوروبية الكبرى</span>
+            <span>كل دقيقة (يتأخر المصدر 2–5 دقائق)</span>
+          </div>
+        ) : null}
         <div className="info-row">
           <span className="muted">تحديث باقي المباريات</span>
           <span>{meta.data ? every(meta.data.pollSeconds) : '…'}</span>

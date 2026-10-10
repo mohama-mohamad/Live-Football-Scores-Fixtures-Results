@@ -1,16 +1,19 @@
 // منطق التطبيق: جلب البيانات مع الذاكرة المؤقتة، وتحديث المباريات المباشرة، وإرسال التنبيهات
 import type { Match, MatchDetails, PushPrefs, Standings } from '../../shared/types';
 import { LEAGUES, leaguePriority } from '../../shared/leagues';
-import { teamKey } from '../../shared/teams';
+import { isAmbiguousKey, teamKey } from '../../shared/teams';
 import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
-import { BudgetExceededError, budgetCap, cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
+import { BudgetExceededError, budgetCap, cached, type Cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
 import { computePlan, matchWindow, type LivePlan, type TimeWindow } from './plan';
 import {
+  FD_MATCH_OFFSET,
   hasSecondary,
   isSecondaryMatch,
+  secondaryByIds,
+  secondaryLive,
   recordTeams,
   secondaryDay,
   secondaryLeagueMatches,
@@ -27,6 +30,8 @@ export function getProvider(env: Env, purpose: BudgetPurpose = 'browse'): Provid
   if (env.PROVIDER === 'api-football') {
     if (!env.API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY غير مضبوط');
     return new ApiFootballProvider(env.API_FOOTBALL_KEY, {
+      // البطولات التي يغطيها football-data.org تؤخذ منه، فلا نستهلك رصيد API-Football عليها
+      leagues: primaryLeagues(env),
       onRequest: () => consumeBudget(env, purpose),
       memo: async (key, ttl, fn) => (await cached(env, key, ttl, fn)).value,
     });
@@ -54,6 +59,12 @@ function metered(p: Provider, onRequest: () => Promise<void>): Provider {
     standings: wrap(p.standings),
     leagueMatches: wrap(p.leagueMatches),
   };
+}
+
+// البطولات التي تُجلب من API-Football (كلها، أو ما لا يغطيه football-data.org)
+export function primaryLeagues(env: Env): number[] {
+  const sec = new Set(secondaryLeagues(env));
+  return LEAGUES.map((l) => l.id).filter((id) => !sec.has(id));
 }
 
 // ما تتيحه خطة البيانات الحالية
@@ -141,16 +152,21 @@ export async function matchesForLocalDate(env: Env, date: string, tz: string) {
   // نتحمّل فشل أحد الأيام (مثلاً يوم خارج نطاق الخطة) ونعرض ما توفر
   const { afWindow } = features(env);
   const now = Date.now();
-  const dayLoader = (d: string) => {
+  const secondary = p.limited && hasSecondary(env);
+  const primarySet = new Set(primaryLeagues(env));
+  // لكل يوم UTC: دوريات API-Football (ضمن نطاق خطته) + البطولات الأوروبية من football-data.org
+  const loaders = utcDatesCovering(start, end).flatMap((d) => {
     const diff = Math.abs(Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${utcDate(now)}T00:00:00Z`)) / DAY_MS));
-    if (!p.limited || diff <= afWindow) return utcDayMatches(env, p, d, now);
-    // خارج نطاق API-Football: البطولات الكبرى من football-data.org
-    if (hasSecondary(env)) return secondaryDay(env, d, now);
-    return Promise.reject(new Error('out of range'));
-  };
-  const settled = await Promise.allSettled(utcDatesCovering(start, end).map(dayLoader));
+    const out: Promise<Cached<Match[]>>[] = [];
+    if (!p.limited || diff <= afWindow) {
+      out.push(utcDayMatches(env, p, d, now).then((r) => (secondary ? { ...r, value: r.value.filter((m) => primarySet.has(m.league.id)) } : r)));
+    }
+    if (secondary && diff <= 8) out.push(secondaryDay(env, d, now));
+    return out;
+  });
+  const settled = await Promise.allSettled(loaders);
   const days = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
-  if (!days.length) throw (settled[0] as PromiseRejectedResult).reason;
+  if (settled.length && !days.length) throw (settled[0] as PromiseRejectedResult).reason;
   let stale = days.length < settled.length;
   const byId = new Map<number, { match: Match; fetchedAt: number }>();
   for (const d of days) {
@@ -160,6 +176,7 @@ export async function matchesForLocalDate(env: Env, date: string, tz: string) {
       if (t >= start && t < end) byId.set(m.id, { match: m, fetchedAt: d.fetchedAt });
     }
   }
+  if (!days.length && !settled.length) return { data: [], stale: false, provider: p.name };
   if (p.limited && byId.size) {
     const states = await loadStates(env, [...byId.keys()]);
     for (const [id, s] of states) {
@@ -205,7 +222,11 @@ export async function matchDetails(env: Env, id: number) {
   if (isSecondaryMatch(id)) {
     if (!hasSecondary(env)) return { data: null, stale: false, provider: p.name };
     const r = await secondaryMatch(env, id);
-    return { data: r.value, stale: r.stale, provider: 'football-data' };
+    let data = r.value;
+    // أثناء المباراة: أحدث نتيجة من المتابعة المباشرة
+    const s = (await loadStates(env, [id])).get(id);
+    if (data && s && s.updatedAt > r.fetchedAt) data = { ...data, ...s.match };
+    return { data, stale: r.stale, provider: 'football-data' };
   }
   const r = await cached<MatchDetails | null>(
     env,
@@ -232,7 +253,7 @@ export async function matchDetails(env: Env, id: number) {
 
 export async function standings(env: Env, leagueId: number) {
   const p = getProvider(env);
-  if (p.limited && env.STANDINGS_ENABLED === 'false') {
+  if (p.limited && hasSecondary(env) && secondaryLeagues(env).includes(leagueId)) {
     const r = await secondaryStandings(env, leagueId);
     return { data: r.value, stale: r.stale, provider: 'football-data' };
   }
@@ -242,7 +263,7 @@ export async function standings(env: Env, leagueId: number) {
 
 export async function leagueMatches(env: Env, leagueId: number) {
   const p = getProvider(env);
-  if (p.limited && env.STANDINGS_ENABLED === 'false') {
+  if (p.limited && hasSecondary(env) && secondaryLeagues(env).includes(leagueId)) {
     const r = await secondaryLeagueMatches(env, leagueId);
     return { data: r.value, stale: r.stale, provider: 'football-data' };
   }
@@ -260,6 +281,8 @@ export async function budgetInfo(env: Env) {
     pollSeconds: plan ? plan.slowSec : pollIntervalMs(env, p) / 1000,
     // تحديث مباريات الفرق المفضلة (أسرع)
     favPollSeconds: plan ? plan.fastSec : pollIntervalMs(env, p) / 1000,
+    // البطولات الأوروبية الكبرى (football-data.org): فحص كل دقيقة
+    secondaryPollSeconds: p.limited && hasSecondary(env) ? 60 : null,
   };
 }
 
@@ -292,7 +315,11 @@ async function priorityTeams(env: Env, now: number): Promise<Priority> {
   return fav;
 }
 
-const isFavTeam = (fav: Priority, t: { id: number; name: string }) => fav.ids.has(t.id) || (fav.keys.size > 0 && fav.keys.has(teamKey(t.name)));
+const keyMatch = (keys: { has(k: string): boolean; size?: number }, t: { name: string; short?: string }) => {
+  const k = teamKey(t.name, t.short);
+  return !isAmbiguousKey(k) && keys.has(k);
+};
+const isFavTeam = (fav: Priority, t: { id: number; name: string; short?: string }) => fav.ids.has(t.id) || (fav.keys.size > 0 && keyMatch(fav.keys, t));
 
 // ---------- المتابعة المباشرة ----------
 
@@ -302,12 +329,90 @@ export interface RefreshResult {
   notices: Notice[];
 }
 
+// يحدّث المباشر من المصدرين: API-Football (دورياته) و football-data.org (البطولات الأوروبية الكبرى)
 export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live'), now = Date.now()): Promise<RefreshResult> {
-  // المباريات التي كانت جارية في آخر فحص
-  const { results: openRows } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{
-    id: number;
-    snapshot: string;
-  }>();
+  const [a, b] = await Promise.all([
+    refreshPrimary(env, p, now),
+    hasSecondary(env) && p.limited ? refreshSecondary(env, now) : Promise.resolve<RefreshResult>({ polled: false, reason: 'off', notices: [] }),
+  ]);
+  return { polled: a.polled || b.polled, reason: a.polled ? a.reason : b.polled ? b.reason : a.reason, notices: [...a.notices, ...b.notices] };
+}
+
+type OpenRow = { id: number; snapshot: string };
+
+// يكتب الحالات الجديدة ويُرجع التنبيهات الناتجة عن التغيّر
+async function applyUpdates(env: Env, updates: Match[], now: number, extra: D1PreparedStatement[] = []): Promise<Notice[]> {
+  const prevStates = await loadStates(env, updates.map((m) => m.id));
+  const notices: Notice[] = [];
+  const writes: D1PreparedStatement[] = [...extra];
+  for (const m of updates) {
+    notices.push(...diffMatch(prevStates.get(m.id)?.match, m));
+    writes.push(
+      env.DB.prepare(
+        `INSERT INTO match_state (id, status, kickoff, snapshot, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, snapshot = excluded.snapshot, updated_at = excluded.updated_at`,
+      ).bind(m.id, m.status, Date.parse(m.kickoff), JSON.stringify(m), now),
+    );
+  }
+  if (writes.length) await env.DB.batch(writes);
+  return notices;
+}
+
+// نزرع حالة "لم تبدأ" للمباريات القريبة حتى نكتشف لحظة انطلاقها
+async function seedSoon(env: Env, schedule: Match[], now: number): Promise<void> {
+  const soon = schedule.filter((m) => {
+    const t = Date.parse(m.kickoff);
+    return m.status === 'scheduled' && t <= now + 2 * 60_000 && t > now - 3 * 3600_000;
+  });
+  if (!soon.length) return;
+  await env.DB.batch(
+    soon.map((m) =>
+      env.DB.prepare('INSERT OR IGNORE INTO match_state (id, status, kickoff, snapshot, updated_at) VALUES (?, ?, ?, ?, ?)').bind(m.id, m.status, Date.parse(m.kickoff), JSON.stringify(m), 0),
+    ),
+  );
+}
+
+// football-data.org: لا حد يومي (10 طلبات/دقيقة)، فنفحص كل دقيقة أثناء مباريات بطولاته
+async function refreshSecondary(env: Env, now: number): Promise<RefreshResult> {
+  const { results: openRows } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE status IN ('live','halftime','penalties') AND id >= ?`)
+    .bind(FD_MATCH_OFFSET)
+    .all<OpenRow>();
+  let schedule: Match[] = [];
+  try {
+    schedule = (await secondaryDay(env, utcDate(now), now)).value;
+  } catch (e) {
+    console.warn('fd schedule failed', e);
+  }
+  await seedSoon(env, schedule, now);
+  const states = await loadStates(env, schedule.map((m) => m.id));
+  const active =
+    openRows.length > 0 ||
+    schedule.some((m) => {
+      const w = matchWindow(states.get(m.id)?.match ?? m, now);
+      return !!w && w.start <= now && now < w.end;
+    });
+  if (!active) return { polled: false, reason: 'no-matches', notices: [] };
+  if (!(await claimInterval(env, 'fd_live_poll', 58_000, now))) return { polled: false, reason: 'interval', notices: [] };
+  try {
+    const live = await secondaryLive(env);
+    const liveIds = new Set(live.map((m) => m.id));
+    const gone = openRows.map((r) => r.id).filter((id) => !liveIds.has(id));
+    const finals = gone.length ? await secondaryByIds(env, gone) : [];
+    const notices = await applyUpdates(env, [...live, ...finals], now, [env.DB.prepare("DELETE FROM meta WHERE key = 'fd_error'")]);
+    return { polled: true, notices };
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    await setMeta(env, 'fd_error', JSON.stringify({ at: new Date(now).toISOString(), msg: msg.slice(0, 300) }));
+    console.warn('fd live poll failed', msg);
+    return { polled: false, reason: 'error', notices: [] };
+  }
+}
+
+async function refreshPrimary(env: Env, p: Provider, now: number): Promise<RefreshResult> {
+  // المباريات التي كانت جارية في آخر فحص (من هذا المصدر فقط)
+  const { results: openRows } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE status IN ('live','halftime','penalties') AND id < ?`)
+    .bind(FD_MATCH_OFFSET)
+    .all<OpenRow>();
 
   // جدول اليوم (وأمس في الساعات الأولى فقط، لمباريات منتصف الليل)
   let schedule: Match[] = [];
@@ -318,25 +423,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
   } catch (e) {
     console.warn('schedule load failed', e);
   }
-  const soon = schedule.filter((m) => {
-    const t = Date.parse(m.kickoff);
-    return m.status === 'scheduled' && t <= now + 2 * 60_000 && t > now - 3 * 3600_000;
-  });
-
-  // نزرع حالة "لم تبدأ" للمباريات القريبة حتى نكتشف لحظة انطلاقها
-  if (soon.length) {
-    await env.DB.batch(
-      soon.map((m) =>
-        env.DB.prepare('INSERT OR IGNORE INTO match_state (id, status, kickoff, snapshot, updated_at) VALUES (?, ?, ?, ?, ?)').bind(
-          m.id,
-          m.status,
-          Date.parse(m.kickoff),
-          JSON.stringify(m),
-          0,
-        ),
-      ),
-    );
-  }
+  await seedSoon(env, schedule, now);
 
   let intervalMs = pollIntervalMs(env, p);
   if (p.limited) {
@@ -385,28 +472,12 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     return { polled: false, reason: 'error', notices: [] };
   }
   const updates = [...live, ...finals];
-
-  const prevStates = await loadStates(env, updates.map((m) => m.id));
-  const notices: Notice[] = [];
-  const writes: D1PreparedStatement[] = [];
-  writes.push(env.DB.prepare("DELETE FROM meta WHERE key IN ('live_error', 'live_failures')"));
-  writes.push(
+  const notices = await applyUpdates(env, updates, now, [
+    env.DB.prepare("DELETE FROM meta WHERE key IN ('live_error', 'live_failures')"),
     env.DB.prepare("INSERT INTO meta (key, value) VALUES ('af_last', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(
       JSON.stringify({ at: new Date(now).toISOString(), ok: true, colo: (p as { lastColo?: string }).lastColo ?? '' }),
     ),
-  );
-  for (const m of updates) {
-    const prev = prevStates.get(m.id)?.match;
-    notices.push(...diffMatch(prev, m));
-    const snap = JSON.stringify(m);
-    writes.push(
-      env.DB.prepare(
-        `INSERT INTO match_state (id, status, kickoff, snapshot, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(id) DO UPDATE SET status = excluded.status, snapshot = excluded.snapshot, updated_at = excluded.updated_at`,
-      ).bind(m.id, m.status, Date.parse(m.kickoff), snap, now),
-    );
-  }
-  if (writes.length) await env.DB.batch(writes);
+  ]);
   if (p.limited) await recordTeams(env, updates, now);
   return { polled: true, notices };
 }
@@ -442,9 +513,9 @@ export function wants(prefs: PushPrefs, n: Notice): boolean {
   if (!prefs.events?.[n.kind]) return false;
   const m = n.match;
   if (prefs.teams.includes(m.home.id) || prefs.teams.includes(m.away.id) || prefs.leagues.includes(m.league.id)) return true;
-  // فرق أُضيفت من بيانات football-data.org ولم يُعرف معرّفها بعد: نطابق بالاسم
-  const keys = prefs.teamKeys ?? [];
-  return keys.length > 0 && (keys.includes(teamKey(m.home.name)) || keys.includes(teamKey(m.away.name)));
+  // المعرّفات تختلف بين المصدرين: نطابق أيضاً بالاسم الموحّد (عدا الأسماء المشتركة)
+  const keys = new Set(prefs.teamKeys ?? []);
+  return keys.size > 0 && (keyMatch(keys, m.home) || keyMatch(keys, m.away));
 }
 
 export async function dispatch(env: Env, notices: Notice[]): Promise<{ sent: number; failed: number; removed: number }> {

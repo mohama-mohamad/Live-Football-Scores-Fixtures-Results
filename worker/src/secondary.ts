@@ -94,6 +94,15 @@ export async function secondaryLeagueMatches(env: Env, leagueId: number, now = D
   return { value: { last, next }, stale: r.stale };
 }
 
+// المباشر وتأكيد النتائج (بدون ذاكرة مؤقتة)، مع ربط الفرق بمعرّفات API-Football
+export async function secondaryLive(env: Env): Promise<Match[]> {
+  return mapMatches(env, await client(env).live());
+}
+
+export async function secondaryByIds(env: Env, ids: number[]): Promise<Match[]> {
+  return mapMatches(env, await client(env).matchesByIds(ids));
+}
+
 export async function secondaryMatch(env: Env, id: number) {
   const r = await cached<MatchDetails | null>(
     env,

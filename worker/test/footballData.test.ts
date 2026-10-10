@@ -93,3 +93,16 @@ describe('notifications by team key', () => {
     expect(wants({ teams: [FD_TEAM_OFFSET + 102], leagues: [], events }, n)).toBe(false);
   });
 });
+
+describe('ambiguous names', () => {
+  it('does not match teams sharing an Arabic name across leagues', async () => {
+    const { isAmbiguousKey } = await import('../../shared/teams');
+    expect(isAmbiguousKey(teamKey('Al Ahly'))).toBe(true); // الأهلي المصري والسعودي
+    expect(isAmbiguousKey(teamKey('Barcelona'))).toBe(false);
+    const events = { kickoff: true, goal: true, redCard: true, halftime: true, fulltime: true };
+    const m = { id: 1, league: { id: 233, name: '' }, kickoff: '2026-10-10T17:00:00Z', status: 'scheduled' as const, home: { id: 1, name: 'Al Ahly' }, away: { id: 2, name: 'Zamalek' }, score: { home: null, away: null } };
+    const [n] = diffMatch(m, { ...m, status: 'live', minute: 1, score: { home: 0, away: 0 } });
+    expect(wants({ teams: [], teamKeys: [teamKey('Al-Ahli Saudi')], leagues: [], events }, n)).toBe(false);
+    expect(wants({ teams: [], teamKeys: [teamKey('Zamalek SC')], leagues: [], events }, n)).toBe(true);
+  });
+});
