@@ -371,8 +371,11 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     finals = gone.length ? await p.matchesByIds(gone) : [];
   } catch (e) {
     if (e instanceof BudgetExceededError) return { polled: false, reason: 'budget', notices: [] };
-    // فشل مؤقت (مثل تجاوز حد الطلبات في الدقيقة): نعيد المحاولة بعد دقيقة ونصف بدل انتظار الفترة كاملة
-    await setMeta(env, 'live_poll', String(now - intervalMs + 90_000));
+    // فشل مؤقت: نعيد المحاولة بتباعد متزايد (3، 6، 12... دقيقة، حتى الفترة المخططة) حتى لا يُهدر الرصيد
+    const failures = Number((await getMeta(env, 'live_failures')) ?? 0) + 1;
+    const retryMs = Math.min(intervalMs, 3 * 60_000 * 2 ** Math.min(failures - 1, 6));
+    await setMeta(env, 'live_failures', String(failures));
+    await setMeta(env, 'live_poll', String(now - intervalMs + retryMs));
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     // آخر خطأ يُحفظ للتشخيص (يظهر أيضاً في /api/meta)
     await setMeta(env, 'live_error', JSON.stringify({ at: new Date(now).toISOString(), msg: msg.slice(0, 300) }));
@@ -384,7 +387,7 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
   const prevStates = await loadStates(env, updates.map((m) => m.id));
   const notices: Notice[] = [];
   const writes: D1PreparedStatement[] = [];
-  writes.push(env.DB.prepare("DELETE FROM meta WHERE key = 'live_error'"));
+  writes.push(env.DB.prepare("DELETE FROM meta WHERE key IN ('live_error', 'live_failures')"));
   for (const m of updates) {
     const prev = prevStates.get(m.id)?.match;
     notices.push(...diffMatch(prev, m));
