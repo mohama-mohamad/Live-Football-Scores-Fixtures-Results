@@ -79,20 +79,30 @@ jobs:
               echo "⚠️ مفتاح API-Football غير صالح: $err — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
             else
               today=$(date -u +%F)
-              e_live=$(api "/fixtures?live=39-140-307" | errs)
-              e_today=$(api "/fixtures?date=$today" | errs)
+              if [ "$plan" = "Free" ]; then
+                # الخطة المجانية معروفة (فحصناها): مباشر + أمس/اليوم/غداً، بدون ترتيب.
+                # لا نستهلك طلبات للفحص (طلب /status لا يُحتسب من الحد)
+                e_live=""; e_today=""
+              else
+                e_live=$(api "/fixtures?live=39-140-307" | errs)
+                e_today=$(api "/fixtures?date=$today" | errs)
+              fi
               if [ -n "$e_live$e_today" ]; then
                 echo "::warning title=خطة API-Football لا تتيح المباريات الحالية::$e_live $e_today"
                 echo "⚠️ خطة API-Football ($plan) لا تتيح المباريات المباشرة أو مباريات اليوم: $e_live $e_today — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
               else
                 provider=api-football
                 # الترتيب يحتاج الموسم الحالي (غير متاح في الخطة المجانية)
-                season=$(api "/leagues?id=39&current=true" | jq -r '.response[0].seasons[0].year // empty' 2>/dev/null || true)
-                e_st=$( [ -n "$season" ] && api "/standings?league=39&season=$season" | errs || echo "no season")
-                [ -n "$e_st" ] && standings=false
-                # نطاق الأيام: هل يتاح ما بعد 3 أيام؟
-                e_far=$(api "/fixtures?date=$(date -u -d '+3 day' +%F)" | errs)
-                [ -n "$e_far" ] && window=1 || window=31
+                if [ "$plan" = "Free" ]; then
+                  standings=false; window=1
+                else
+                  season=$(api "/leagues?id=39&current=true" | jq -r '.response[0].seasons[0].year // empty' 2>/dev/null || true)
+                  e_st=$( [ -n "$season" ] && api "/standings?league=39&season=$season" | errs || echo "no season")
+                  [ -n "$e_st" ] && standings=false
+                  # نطاق الأيام: هل يتاح ما بعد 3 أيام؟
+                  e_far=$(api "/fixtures?date=$(date -u -d '+3 day' +%F)" | errs)
+                  [ -n "$e_far" ] && window=1 || window=31
+                fi
                 # 60% من الحد اليومي للمتابعة المباشرة، موزّعة على نحو 10 ساعات مباريات يومياً
                 poll=$(( 36000 * 10 / (limit * 6) ))
                 [ "$poll" -lt 60 ] && poll=60

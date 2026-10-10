@@ -307,7 +307,10 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     finals = gone.length ? await p.matchesByIds(gone) : [];
   } catch (e) {
     if (e instanceof BudgetExceededError) return { polled: false, reason: 'budget', notices: [] };
-    throw e;
+    // فشل مؤقت (مثل تجاوز حد الطلبات في الدقيقة): نعيد المحاولة بعد دقيقة ونصف بدل انتظار الفترة كاملة
+    await setMeta(env, 'live_poll', String(now - intervalMs + 90_000));
+    console.warn('live poll failed', e instanceof Error ? e.message : e);
+    return { polled: false, reason: 'error', notices: [] };
   }
   const updates = [...live, ...finals];
 
