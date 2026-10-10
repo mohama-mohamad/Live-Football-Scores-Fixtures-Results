@@ -1,0 +1,45 @@
+# تشخيص: يلتقط سجلات الـ Worker الحية لمدة قصيرة أثناء طلب مسار معيّن
+name: Worker logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: 'المسار المطلوب أثناء الالتقاط'
+        default: '/api/live'
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Tail while requesting
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          REQ_PATH: ${{ inputs.path }}
+        run: |
+          npx wrangler tail koora-live --format json > tail.log 2>tail.err &
+          pid=$!
+          sleep 12
+          for i in 1 2; do
+            curl -s -o body.txt -w "HTTP %{http_code} in %{time_total}s\n" "https://koora-live.mmido80.workers.dev$REQ_PATH"
+            head -c 600 body.txt; echo
+            sleep 5
+          done
+          # ننتظر تشغيل المهمة الدورية أيضاً
+          sleep 50
+          kill $pid || true
+          sleep 2
+          echo "===== logs ====="
+          jq -c '{event: (.event.request.url // .event.cron // "?"), outcome, cpu: .cpuTime, wall: .wallTime, logs: [.logs[]? | {level, message}], exceptions: [.exceptions[]? | {name, message}]}' tail.log 2>/dev/null | head -40 || head -c 4000 tail.log
+          echo "===== stderr ====="
+          tail -5 tail.err
