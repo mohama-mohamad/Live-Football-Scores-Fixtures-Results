@@ -1,5 +1,6 @@
 # نشر تلقائي على Cloudflare عند كل دفع (push)
-# يتطلب سراً واحداً في GitHub: CLOUDFLARE_API_TOKEN
+# يتطلب سراً في GitHub: CLOUDFLARE_API_TOKEN
+# واختيارياً API_FOOTBALL_KEY للبيانات الحقيقية (يُتحقق منه ويُفعّل تلقائياً)
 name: Deploy to Cloudflare
 
 on:
@@ -52,6 +53,50 @@ jobs:
           [ -n "$ACCOUNT_ID" ] && export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
           npx wrangler d1 migrations apply koora-live --remote
 
+      # البيانات الحقيقية: إن وُجد السر API_FOOTBALL_KEY نتحقق منه ونفعّله تلقائياً،
+      # وإلا (أو إن كانت الخطة لا تسمح بالبيانات الحالية) نبقى على البيانات التجريبية
+      - name: Configure data provider
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          [ -n "$ACCOUNT_ID" ] && export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
+          provider=mock; limit=100; poll=60
+          if [ -z "$API_FOOTBALL_KEY" ]; then
+            echo "لا يوجد API_FOOTBALL_KEY — سيعمل التطبيق بالبيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
+          else
+            api() { curl -s -H "x-apisports-key: $API_FOOTBALL_KEY" "https://v3.football.api-sports.io$1"; }
+            errs() { jq -r '(.errors // []) | if type=="array" then join(" | ") else (to_entries|map(.value|tostring)|join(" | ")) end' 2>/dev/null || echo "رد غير صالح من API-Football"; }
+            status=$(api /status)
+            err=$(echo "$status" | errs)
+            plan=$(echo "$status" | jq -r '.response.subscription.plan // "?"' 2>/dev/null || echo "?")
+            limit=$(echo "$status" | jq -r '.response.requests.limit_day // 100' 2>/dev/null || echo 100)
+            case "$limit" in ''|*[!0-9]*) limit=100;; esac
+            if [ -n "$err" ]; then
+              echo "::warning title=مفتاح API-Football غير صالح::$err"
+              echo "⚠️ مفتاح API-Football غير صالح: $err — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
+            else
+              today=$(date -u +%F)
+              e1=$(api "/fixtures?date=$today" | errs)
+              season=$(api "/leagues?id=39&current=true" | jq -r '.response[0].seasons[0].year // empty' 2>/dev/null || true)
+              e2=$( [ -n "$season" ] && api "/standings?league=39&season=$season" | errs || echo "no season")
+              if [ -n "$e1$e2" ]; then
+                echo "::warning title=خطة API-Football لا تتيح البيانات الحالية::$e1 $e2"
+                echo "⚠️ خطة API-Football ($plan) لا تتيح مباريات اليوم أو الموسم الحالي: $e1 $e2 — بقينا على البيانات التجريبية" >> "$GITHUB_STEP_SUMMARY"
+              else
+                provider=api-football
+                # 60% من الحد اليومي للمتابعة المباشرة، موزّعة على نحو 10 ساعات مباريات يومياً
+                poll=$(( 36000 * 10 / (limit * 6) ))
+                [ "$poll" -lt 60 ] && poll=60
+                echo "$API_FOOTBALL_KEY" | npx wrangler secret put API_FOOTBALL_KEY
+                echo "✅ بيانات حقيقية من API-Football — الخطة: $plan، الحد اليومي: $limit، التحديث المباشر كل $poll ثانية" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          fi
+          echo "DEPLOY_VARS=--var PROVIDER:$provider --var DAILY_REQUEST_LIMIT:$limit --var LIVE_POLL_SECONDS:$poll" >> "$GITHUB_ENV"
+
       - name: Deploy worker + app
         working-directory: worker
         env:
@@ -59,7 +104,7 @@ jobs:
           ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           [ -n "$ACCOUNT_ID" ] && export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
-          npx wrangler deploy | tee deploy.log
+          npx wrangler deploy $DEPLOY_VARS | tee deploy.log
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           echo "url=$url" >> "$GITHUB_ENV"
           echo "### 🚀 تم النشر" >> "$GITHUB_STEP_SUMMARY"
