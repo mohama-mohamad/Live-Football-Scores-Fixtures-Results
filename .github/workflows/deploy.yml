@@ -61,5 +61,26 @@ jobs:
           [ -n "$ACCOUNT_ID" ] && export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"
           npx wrangler deploy | tee deploy.log
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$url" >> "$GITHUB_ENV"
           echo "### 🚀 تم النشر" >> "$GITHUB_STEP_SUMMARY"
           echo "رابط التطبيق: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # فحص سريع للنسخة المنشورة: الصفحة، الـ Service Worker، والواجهة
+      - name: Smoke test
+        run: |
+          [ -n "$url" ] || { echo "::warning::لم يُعثر على رابط workers.dev"; exit 0; }
+          sleep 5
+          check() {
+            code=$(curl -s -o /tmp/body -w '%{http_code}' --retry 3 --retry-delay 3 "$url$1")
+            type=$(curl -s -o /dev/null -w '%{content_type}' "$url$1")
+            echo "$1 -> $code ($type)"
+            [ "$code" = "200" ] || { cat /tmp/body; exit 1; }
+            case "$type" in *"$2"*) ;; *) echo "::error::$1 نوع غير متوقع: $type"; exit 1;; esac
+          }
+          check / text/html
+          check /sw.js javascript
+          check /manifest.webmanifest manifest
+          check /api/meta json
+          check /api/live json
+          check "/api/matches?date=$(date -u +%F)&tz=Asia/Riyadh" json
+          curl -s "$url/api/live" | head -c 300; echo
