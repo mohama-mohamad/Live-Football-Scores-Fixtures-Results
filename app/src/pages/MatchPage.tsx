@@ -111,7 +111,7 @@ function Hero({ m }: { m: MatchDetails }) {
 
 // مباريات football-data.org (الخطة المجانية): النتيجة فقط، بدون أحداث أو تشكيلة أو إحصائيات
 const basicOnly = (m: MatchDetails) => m.id >= SECONDARY_MATCH_OFFSET;
-const BASIC_NOTE = 'مصدر بيانات هذه البطولة في الخطة المجانية يوفّر النتيجة فقط، دون الهدافين والبطاقات والتبديلات والتشكيلة والإحصائيات.';
+const BASIC_NOTE = 'النتيجة لهذه البطولة تتحدّث كل دقيقة، أما الأحداث والإحصائيات والتشكيلة فتصل من مصدر إضافي كل 15 دقيقة تقريباً ولم تصل بعد.';
 
 function Events({ m }: { m: MatchDetails }) {
   const list = [...(m.events ?? [])].sort((a, b) => b.minute - a.minute || (b.extra ?? 0) - (a.extra ?? 0));

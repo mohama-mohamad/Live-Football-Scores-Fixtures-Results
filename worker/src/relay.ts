@@ -8,11 +8,11 @@ import { LEAGUES } from '../../shared/leagues';
 import { teamKey } from '../../shared/teams';
 import type { Env } from './env';
 import { normFixture, slim } from './providers/apiFootball';
-import { matchWindow } from './plan';
+import { MATCH_MS, matchWindow } from './plan';
 import { FD_MATCH_OFFSET, recordTeams, secondaryLeagues } from './secondary';
 import { budgetCap, getMeta, setMeta, usageFor } from './store';
 import { DAY_MS, utcDate } from './time';
-import { applyUpdates, dateTtl, dispatch, getProvider, loadStates } from './service';
+import { applyUpdates, dateTtl, dispatch, getProvider, isFavTeam, loadStates, priorityTeams } from './service';
 import type { Notice } from './notify';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -22,6 +22,8 @@ export const relayMode = (env: Env) => env.AF_VIA_RELAY === 'true' && !!env.API_
 
 const enc = new TextEncoder();
 const MAX_AGE_MS = 15 * 60_000;
+const LINEUP_LOOKAHEAD_MS = 60 * 60_000;
+export const FULL_CHUNK = 20;
 
 export async function verifySignature(secret: string, body: string, signatureHex: string): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/i.test(signatureHex)) return false;
@@ -54,21 +56,32 @@ export async function relayPlan(env: Env, now = Date.now()) {
     if ((!c || c.expires < now) && days.length < browseLeft - 2) days.push(d);
   }
 
-  // هل توجد مباراة جارية أو على وشك البدء؟ (من قوائم اليوم + الحالات المفتوحة)
-  const schedule = [...((await cachedValue<Match[]>(env, `date:${today}`))?.value ?? []), ...((await cachedValue<Match[]>(env, `fd:date:${today}`))?.value ?? [])];
-  const { results: open } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{ id: number; snapshot: string }>();
-  const states = await loadStates(env, schedule.map((m) => m.id));
-  const active =
-    open.length > 0 ||
-    schedule.some((m) => {
-      const w = matchWindow(states.get(m.id)?.match ?? m, now);
-      return !!w && w.start <= now && now < w.end;
-    });
+  // مباريات اليوم (وأمس لما بعد منتصف الليل) من API-Football، ومن football-data.org
+  const af: Match[] = [];
+  for (const d of [utcDate(now - DAY_MS), today]) af.push(...((await cachedValue<Match[]>(env, `date:${d}`))?.value ?? []));
+  const fd = (await cachedValue<Match[]>(env, `fd:date:${today}`))?.value ?? [];
+  const { results: open } = await env.DB.prepare(`SELECT id FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{ id: number }>();
+  const states = await loadStates(env, [...af, ...fd].map((m) => m.id));
+  const cur = (m: Match) => states.get(m.id)?.match ?? m;
+  const inWindow = (m: Match) => {
+    const w = matchWindow(cur(m), now);
+    return !!w && w.start <= now && now < w.end;
+  };
+  const active = open.length > 0 || af.some(inWindow) || fd.some(inWindow);
   const liveLeft = budgetCap(env, 'live') - (await usageFor(env, 'live'));
-  const live = active && liveLeft > 1;
-  // مباريات API-Football كانت جارية: نطلب نتيجتها النهائية إن اختفت من قائمة المباشر
-  const ids = open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => r.id).slice(0, 20);
-  return { leagues, live, days, ids: live ? ids : [], liveLeft, browseLeft };
+  const go = active && liveLeft > 1;
+
+  // التفاصيل الكاملة (أحداث + إحصائيات + تشكيلة) للمباريات الجارية والقريبة (التشكيلة تُعلن قبل ساعة تقريباً)
+  const fav = await priorityTeams(env, now);
+  const soon = (m: Match) => cur(m).status === 'scheduled' && Date.parse(m.kickoff) - now < LINEUP_LOOKAHEAD_MS && Date.parse(m.kickoff) > now - MATCH_MS;
+  const rank = (m: Match) => (isFavTeam(fav, m.home) || isFavTeam(fav, m.away) ? 0 : inWindow(m) ? 1 : 2);
+  const wanted = af.filter((m) => inWindow(m) || soon(m)).sort((a, b) => rank(a) - rank(b));
+  const ids = [...new Set([...open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => r.id), ...wanted.map((m) => m.id)])];
+  // طلب واحد لكل 20 مباراة؛ طلبان كحد أقصى
+  const max = liveLeft > 4 ? 2 * FULL_CHUNK : FULL_CHUNK;
+  const full = go ? ids.slice(0, max) : [];
+  // إن لم نعرف أي مباراة (قائمة اليوم غير متوفرة) نسأل عن المباشر عموماً
+  return { leagues, live: go && !full.length, full, days, liveLeft, browseLeft };
 }
 
 // ---------- الاستقبال ----------
@@ -77,6 +90,8 @@ export interface RelayBody {
   ts: number;
   live?: Json[] | null;
   finals?: Json[] | null;
+  // fixtures?ids= : أحداث + إحصائيات + تشكيلة
+  full?: Json[] | null;
   days?: Record<string, Json[]>;
 }
 
@@ -88,8 +103,18 @@ function maxScore(a: Match['score'], b: Match['score']): Match['score'] {
   return { home: pick(a.home, b.home), away: pick(a.away, b.away) };
 }
 
+// الإحصائيات والتشكيلة (لا تُحفظ في حالة المباراة) — تُقرأ عند فتح صفحة المباراة
+function extraStmt(env: Env, id: number, m: MatchDetails, now: number, events?: MatchEvent[]): D1PreparedStatement | null {
+  if (!m.stats?.length && !m.lineups?.length && !events?.length) return null;
+  const ttl = m.status === 'finished' ? 7 * DAY_MS : 12 * 3600_000;
+  return env.DB.prepare(
+    `INSERT INTO cache (key, value, fetched_at, expires_at) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`,
+  ).bind(`extra:${id}`, JSON.stringify({ stats: m.stats ?? [], lineups: m.lineups ?? [], events: events ?? [] }), now, now + ttl);
+}
+
 // يضيف أحداث API-Football (الهدافون، البطاقات...) إلى مباريات football-data.org المقابلة
-async function enrichSecondary(env: Env, list: MatchDetails[], now: number): Promise<Notice[]> {
+async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extras: D1PreparedStatement[]): Promise<Notice[]> {
   if (!list.length) return [];
   const { results } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE id >= ?1 AND kickoff BETWEEN ?2 AND ?3`)
     .bind(FD_MATCH_OFFSET, now - DAY_MS, now + DAY_MS)
@@ -111,6 +136,9 @@ async function enrichSecondary(env: Env, list: MatchDetails[], now: number): Pro
     ]);
     const events: MatchEvent[] = (af.events ?? []).map((e) => ({ ...e, teamId: teamMap.get(e.teamId) ?? e.teamId }));
     const finished = af.status === 'finished' || fd.status === 'finished';
+    const lineups = af.lineups?.map((l) => ({ ...l, teamId: teamMap.get(l.teamId) ?? l.teamId }));
+    const x = extraStmt(env, fd.id, { ...af, lineups }, now, events);
+    if (x) extras.push(x);
     merged.push({
       ...fd,
       events,
@@ -126,7 +154,7 @@ async function enrichSecondary(env: Env, list: MatchDetails[], now: number): Pro
 export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
   const p = getProvider(env, 'browse');
   const days = body.days ?? {};
-  await addUsage(env, 'live', (body.live ? 1 : 0) + (body.finals?.length ? 1 : 0));
+  await addUsage(env, 'live', (body.live ? 1 : 0) + (body.finals?.length ? 1 : 0) + Math.ceil((body.full?.length ?? 0) / FULL_CHUNK));
   await addUsage(env, 'browse', Object.keys(days).length);
 
   // قوائم الأيام
@@ -144,15 +172,22 @@ export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
 
   // المباشر
   const notices: Notice[] = [];
-  const live = [...(body.live ?? []), ...(body.finals ?? [])].map((f) => normFixture(f));
+  const extras: D1PreparedStatement[] = [];
+  const live = [...(body.live ?? []), ...(body.finals ?? []), ...(body.full ?? [])].map((f) => normFixture(f));
   if (live.length) {
     await recordTeams(env, live, now);
     const sec = new Set(secondaryLeagues(env));
-    notices.push(...(await applyUpdates(env, live.filter((m) => !sec.has(m.league.id)).map(slim), now)));
-    notices.push(...(await enrichSecondary(env, live.filter((m) => sec.has(m.league.id)), now)));
+    const primary = live.filter((m) => !sec.has(m.league.id));
+    for (const m of primary) {
+      const x = extraStmt(env, m.id, m, now);
+      if (x) extras.push(x);
+    }
+    notices.push(...(await applyUpdates(env, primary.map(slim), now)));
+    notices.push(...(await enrichSecondary(env, live.filter((m) => sec.has(m.league.id)), now, extras)));
+    for (let i = 0; i < extras.length; i += 50) await env.DB.batch(extras.slice(i, i + 50));
   }
-  if (body.live) await setMeta(env, 'relay_live_at', String(now));
-  await setMeta(env, 'relay_last', JSON.stringify({ at: new Date(now).toISOString(), live: body.live?.length ?? null, finals: body.finals?.length ?? 0, days: Object.keys(days) }));
+  if (body.live || body.full) await setMeta(env, 'relay_live_at', String(now));
+  await setMeta(env, 'relay_last', JSON.stringify({ at: new Date(now).toISOString(), live: body.live?.length ?? null, full: body.full?.length ?? 0, extras: extras.length, finals: body.finals?.length ?? 0, days: Object.keys(days) }));
   const stats = notices.length ? await dispatch(env, notices) : null;
   return { ok: true, notices: notices.length, stats };
 }

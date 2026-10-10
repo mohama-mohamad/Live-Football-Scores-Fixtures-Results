@@ -230,6 +230,20 @@ export async function isKnownMatch(env: Env, id: number): Promise<boolean> {
   return !!row;
 }
 
+// الإحصائيات والتشكيلة (والأحداث لمباريات football-data.org) التي جلبها وسيط GitHub
+async function withExtra(env: Env, id: number, data: MatchDetails | null): Promise<MatchDetails | null> {
+  if (!data) return data;
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind(`extra:${id}`).first<{ value: string }>();
+  if (!row) return data;
+  const x = JSON.parse(row.value) as Pick<MatchDetails, 'stats' | 'lineups' | 'events'>;
+  return {
+    ...data,
+    stats: data.stats?.length ? data.stats : x.stats,
+    lineups: data.lineups?.length ? data.lineups : x.lineups,
+    events: data.events?.length ? data.events : x.events,
+  };
+}
+
 export async function matchDetails(env: Env, id: number) {
   const p = getProvider(env);
   if (p.limited && !(await isKnownMatch(env, id))) return { data: null, stale: false, provider: p.name };
@@ -240,14 +254,14 @@ export async function matchDetails(env: Env, id: number) {
     // أثناء المباراة: أحدث نتيجة من المتابعة المباشرة
     const s = (await loadStates(env, [id])).get(id);
     if (data && s && s.updatedAt > r.fetchedAt) data = { ...data, ...s.match };
-    return { data, stale: r.stale, provider: 'football-data' };
+    return { data: await withExtra(env, id, data), stale: r.stale, provider: 'football-data' };
   }
   if (relayOnly(env) && p.limited) {
     const s = (await loadStates(env, [id])).get(id);
-    if (s) return { data: s.match as MatchDetails, stale: false, provider: p.name };
+    if (s) return { data: await withExtra(env, id, s.match as MatchDetails), stale: false, provider: p.name };
     const row = await env.DB.prepare(`SELECT value FROM cache WHERE key LIKE 'date:%' AND instr(value, ?1) > 0 LIMIT 1`).bind(`{"id":${id},`).first<{ value: string }>();
     const m = row ? (JSON.parse(row.value) as Match[]).find((x) => x.id === id) : undefined;
-    return { data: (m as MatchDetails) ?? null, stale: false, provider: p.name };
+    return { data: await withExtra(env, id, (m as MatchDetails) ?? null), stale: false, provider: p.name };
   }
   const r = await cached<MatchDetails | null>(
     env,
@@ -313,13 +327,13 @@ async function currentPlan(env: Env): Promise<LivePlan | null> {
 }
 
 // الفرق ذات الأولوية = الفرق المفضلة لدى المشتركين في التنبيهات
-interface Priority {
+export interface Priority {
   ids: Set<number>;
   keys: Set<string>;
 }
 let favCache: { at: number; fav: Priority } | null = null;
 export const invalidatePriorityTeams = () => void (favCache = null);
-async function priorityTeams(env: Env, now: number): Promise<Priority> {
+export async function priorityTeams(env: Env, now: number): Promise<Priority> {
   if (favCache && now - favCache.at < 120_000) return favCache.fav;
   const { results } = await env.DB.prepare('SELECT prefs FROM subscriptions').all<{ prefs: string }>();
   const fav: Priority = { ids: new Set(), keys: new Set() };
@@ -340,7 +354,7 @@ const keyMatch = (keys: { has(k: string): boolean; size?: number }, t: { name: s
   const k = teamKey(t.name, t.short);
   return !isAmbiguousKey(k) && keys.has(k);
 };
-const isFavTeam = (fav: Priority, t: { id: number; name: string; short?: string }) => fav.ids.has(t.id) || (fav.keys.size > 0 && keyMatch(fav.keys, t));
+export const isFavTeam = (fav: Priority, t: { id: number; name: string; short?: string }) => fav.ids.has(t.id) || (fav.keys.size > 0 && keyMatch(fav.keys, t));
 
 // ---------- المتابعة المباشرة ----------
 
