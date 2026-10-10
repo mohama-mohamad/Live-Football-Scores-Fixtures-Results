@@ -1,0 +1,23 @@
+# فحص يدوي: ما الذي يُرجعه football-data.org لمباراة معيّنة (الأحداث، التشكيلة...)
+name: football-data.org match check
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: 'معرّف المباراة في football-data.org'
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch match
+        env:
+          KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ID: ${{ inputs.id }}
+        run: |
+          curl -s -H "X-Auth-Token: $KEY" "https://api.football-data.org/v4/matches/$ID" > m.json
+          echo "keys: $(jq -c 'keys' m.json)"
+          jq -c '{status, minute, injuryTime, score, goals: (.goals | length?), bookings: (.bookings | length?), substitutions: (.substitutions | length?), homeLineup: (.homeTeam.lineup | length?), stats: (.homeTeam.statistics != null), referees: (.referees|length), message}' m.json
+          jq -c '.goals[0]?, .bookings[0]?' m.json
