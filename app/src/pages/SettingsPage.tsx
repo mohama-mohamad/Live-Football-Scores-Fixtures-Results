@@ -35,6 +35,13 @@ function InstallSteps() {
   );
 }
 
+// "كل 3 دقائق تقريباً" / "كل 20 ثانية"
+function every(sec: number): string {
+  if (sec < 60) return `كل ${Math.round(sec)} ثانية`;
+  const min = Math.round(sec / 60);
+  return min === 1 ? 'كل دقيقة' : min === 2 ? 'كل دقيقتين' : min <= 10 ? `كل ${min} دقائق تقريباً` : `كل ${min} دقيقة تقريباً`;
+}
+
 export function SettingsPage() {
   const meta = useMeta();
   const settings = useStore((s) => s.settings);
@@ -129,7 +136,10 @@ export function SettingsPage() {
             />
           </label>
         ))}
-        <p className="hint">تصلك تنبيهات مباريات الفرق والبطولات الموجودة في المفضلة فقط.</p>
+        <p className="hint">
+          تصلك تنبيهات مباريات الفرق والبطولات الموجودة في المفضلة فقط. مباريات <strong>فرقك المفضلة</strong> تُتابَع بأسرع تحديث يسمح به رصيد
+          الخطة، وباقي المباريات بتحديث أبطأ.
+        </p>
       </section>
 
       <section className="panel">
@@ -164,8 +174,12 @@ export function SettingsPage() {
           </div>
         )}
         <div className="info-row">
-          <span className="muted">تحديث المباشر كل</span>
-          <span>{meta.data ? `${meta.data.pollSeconds} ثانية` : '…'}</span>
+          <span className="muted">تحديث مباريات فرقك المفضلة</span>
+          <span>{meta.data ? every(meta.data.favPollSeconds) : '…'}</span>
+        </div>
+        <div className="info-row">
+          <span className="muted">تحديث باقي المباريات</span>
+          <span>{meta.data ? every(meta.data.pollSeconds) : '…'}</span>
         </div>
         <div className="info-row">
           <span className="muted">التوقيت</span>

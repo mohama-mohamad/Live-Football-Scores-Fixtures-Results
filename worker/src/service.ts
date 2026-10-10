@@ -5,7 +5,8 @@ import type { Env } from './env';
 import { ApiFootballProvider } from './providers/apiFootball';
 import { MockProvider } from './providers/mock';
 import type { Provider } from './providers/types';
-import { BudgetExceededError, cached, claimInterval, consumeBudget, dailyLimit, getMeta, usageToday, type BudgetPurpose } from './store';
+import { BudgetExceededError, budgetCap, cached, claimInterval, consumeBudget, dailyLimit, getMeta, setMeta, usageFor, usageToday, type BudgetPurpose } from './store';
+import { computePlan, matchWindow, type LivePlan, type TimeWindow } from './plan';
 import { DAY_MS, localDayRange, utcDate, utcDatesCovering } from './time';
 import { diffMatch, type Notice } from './notify';
 import { generateVapidKeys, sendPush, type VapidKeys } from './push/webpush';
@@ -19,7 +20,29 @@ export function getProvider(env: Env, purpose: BudgetPurpose = 'browse'): Provid
       memo: async (key, ttl, fn) => (await cached(env, key, ttl, fn)).value,
     });
   }
+  // mock-limited: بيانات تجريبية لكن مع احتساب الحد اليومي (لتجربة سلوك الخطة المجانية محلياً)
+  if (env.PROVIDER === 'mock-limited') return metered(new MockProvider(), () => consumeBudget(env, purpose));
   return new MockProvider();
+}
+
+// يغلّف مزوّداً ليحتسب كل استدعاء كطلب واحد من الحد اليومي
+function metered(p: Provider, onRequest: () => Promise<void>): Provider {
+  const wrap =
+    <A extends unknown[], R>(fn: (...a: A) => Promise<R>) =>
+    async (...a: A) => {
+      await onRequest();
+      return fn.apply(p, a);
+    };
+  return {
+    name: `${p.name}-limited`,
+    limited: true,
+    matchesByUtcDate: wrap(p.matchesByUtcDate),
+    live: wrap(p.live),
+    matchesByIds: wrap(p.matchesByIds),
+    match: wrap(p.match),
+    standings: wrap(p.standings),
+    leagueMatches: wrap(p.leagueMatches),
+  };
 }
 
 const inPlay = (m: Match) => m.status === 'live' || m.status === 'halftime' || m.status === 'penalties';
@@ -40,8 +63,9 @@ function dateTtl(p: Provider, date: string, now: number): number {
   if (!p.limited) return 15;
   const diffDays = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${utcDate(now)}T00:00:00Z`)) / DAY_MS);
   if (diffDays < -1) return 7 * 86400;
-  if (diffDays === -1) return 3 * 3600;
-  if (diffDays === 0) return 30 * 60;
+  if (diffDays === -1) return 6 * 3600;
+  // اليوم: 3 ساعات تكفي، لأن النتائج المباشرة تأتي من المتابعة (match_state) وليس من هذه القائمة
+  if (diffDays === 0) return 3 * 3600;
   return 3 * 3600;
 }
 
@@ -101,7 +125,9 @@ export async function liveMatches(env: Env, ctx?: ExecutionContext) {
     .bind(since)
     .all<{ snapshot: string; updated_at: number }>();
   const lastUpdate = Math.max(0, ...results.map((r) => r.updated_at));
-  const stale = results.length > 0 && Date.now() - lastUpdate > pollIntervalMs(env, p) * 3 + 60_000;
+  const plan = await currentPlan(env);
+  const slowMs = plan ? plan.slowSec * 1000 : pollIntervalMs(env, p);
+  const stale = results.length > 0 && Date.now() - lastUpdate > slowMs * 2 + 60_000;
   return { data: sortMatches(results.map((r) => JSON.parse(r.snapshot) as Match)), stale, provider: p.name };
 }
 
@@ -158,7 +184,38 @@ export async function leagueMatches(env: Env, leagueId: number) {
 
 export async function budgetInfo(env: Env) {
   const p = getProvider(env);
-  return { limited: p.limited, used: p.limited ? await usageToday(env) : 0, limit: p.limited ? dailyLimit(env) : null, pollSeconds: pollIntervalMs(env, p) / 1000 };
+  const plan = p.limited ? await currentPlan(env) : null;
+  return {
+    limited: p.limited,
+    used: p.limited ? await usageToday(env) : 0,
+    limit: p.limited ? dailyLimit(env) : null,
+    pollSeconds: plan ? plan.slowSec : pollIntervalMs(env, p) / 1000,
+    // تحديث مباريات الفرق المفضلة (أسرع)
+    favPollSeconds: plan ? plan.fastSec : pollIntervalMs(env, p) / 1000,
+  };
+}
+
+async function currentPlan(env: Env): Promise<LivePlan | null> {
+  const raw = await getMeta(env, 'live_plan');
+  return raw ? (JSON.parse(raw) as LivePlan) : null;
+}
+
+// الفرق ذات الأولوية = الفرق المفضلة لدى المشتركين في التنبيهات
+let favCache: { at: number; teams: Set<number> } | null = null;
+export const invalidatePriorityTeams = () => void (favCache = null);
+async function priorityTeams(env: Env, now: number): Promise<Set<number>> {
+  if (favCache && now - favCache.at < 120_000) return favCache.teams;
+  const { results } = await env.DB.prepare('SELECT prefs FROM subscriptions').all<{ prefs: string }>();
+  const teams = new Set<number>();
+  for (const r of results) {
+    try {
+      for (const t of (JSON.parse(r.prefs) as PushPrefs).teams ?? []) teams.add(t);
+    } catch {
+      /* تجاهل */
+    }
+  }
+  favCache = { at: now, teams };
+  return teams;
 }
 
 // ---------- المتابعة المباشرة ----------
@@ -170,18 +227,17 @@ export interface RefreshResult {
 }
 
 export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live'), now = Date.now()): Promise<RefreshResult> {
-  if (!(await claimInterval(env, 'live_poll', pollIntervalMs(env, p) - 2000, now))) return { polled: false, reason: 'interval', notices: [] };
-
   // المباريات التي كانت جارية في آخر فحص
   const { results: openRows } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{
     id: number;
     snapshot: string;
   }>();
 
-  // جدول اليوم وأمس (لمعرفة المباريات التي يُفترض أن تبدأ الآن)
+  // جدول اليوم (وأمس في الساعات الأولى فقط، لمباريات منتصف الليل)
   let schedule: Match[] = [];
   try {
-    const days = await Promise.all([utcDate(now - DAY_MS), utcDate(now)].map((d) => utcDayMatches(env, p, d, now)));
+    const dates = new Date(now).getUTCHours() < 4 ? [utcDate(now - DAY_MS), utcDate(now)] : [utcDate(now)];
+    const days = await Promise.all(dates.map((d) => utcDayMatches(env, p, d, now)));
     schedule = days.flatMap((d) => d.value);
   } catch (e) {
     console.warn('schedule load failed', e);
@@ -206,8 +262,30 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     );
   }
 
-  const shouldPoll = !p.limited || openRows.length > 0 || soon.length > 0 || schedule.some(inPlay);
-  if (!shouldPoll) return { polled: false, reason: 'no-matches', notices: [] };
+  let intervalMs = pollIntervalMs(env, p);
+  if (p.limited) {
+    // نحسب الخطة من: مباريات اليوم المتبقية، الفرق المفضلة، والرصيد المتبقي
+    const states = await loadStates(env, schedule.map((m) => m.id));
+    const byId = new Map<number, Match>(schedule.map((m) => [m.id, states.get(m.id)?.match ?? m]));
+    for (const r of openRows) if (!byId.has(r.id)) byId.set(r.id, JSON.parse(r.snapshot) as Match);
+    const fav = await priorityTeams(env, now);
+    const all: TimeWindow[] = [];
+    const favW: TimeWindow[] = [];
+    for (const m of byId.values()) {
+      const w = matchWindow(m, now);
+      if (!w) continue;
+      all.push(w);
+      if (fav.has(m.home.id) || fav.has(m.away.id)) favW.push(w);
+    }
+    const remaining = budgetCap(env, 'live') - (await usageFor(env, 'live'));
+    const plan = computePlan({ favWindows: favW, allWindows: all, remaining, now, slowFloorSec: pollIntervalMs(env, p) / 1000 });
+    await setMeta(env, 'live_plan', JSON.stringify(plan));
+    if (plan.mode === 'idle') return { polled: false, reason: 'no-matches', notices: [] };
+    if (plan.mode === 'budget') return { polled: false, reason: 'budget', notices: [] };
+    intervalMs = (plan.mode === 'fast' ? plan.fastSec : plan.slowSec) * 1000;
+  }
+  if (!(await claimInterval(env, 'live_poll', intervalMs - 2000, now))) return { polled: false, reason: 'interval', notices: [] };
+
   let live: Match[];
   let finals: Match[];
   try {

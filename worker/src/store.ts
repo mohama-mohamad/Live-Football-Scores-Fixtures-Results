@@ -20,6 +20,15 @@ export async function usageToday(env: Env): Promise<number> {
   return row?.n ?? 0;
 }
 
+export async function usageFor(env: Env, purpose: BudgetPurpose): Promise<number> {
+  const row = await env.DB.prepare('SELECT count FROM usage WHERE day = ?').bind(`${utcDay()}:${purpose}`).first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+export async function setMeta(env: Env, key: string, value: string): Promise<void> {
+  await env.DB.prepare('INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, value).run();
+}
+
 // تقسيم الحد اليومي: 60% للمتابعة المباشرة والتنبيهات، و40% لتصفح التطبيق
 // حتى لا يستطيع أحد استهلاك رصيد التنبيهات بطلبات عشوائية من التطبيق
 export type BudgetPurpose = 'live' | 'browse';

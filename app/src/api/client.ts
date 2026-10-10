@@ -29,6 +29,7 @@ export interface Meta {
   used: number;
   limit: number | null;
   pollSeconds: number;
+  favPollSeconds: number;
 }
 
 export const useMeta = () => useQuery({ queryKey: ['meta'], queryFn: () => api<Meta>('/api/meta'), staleTime: 60_000 });

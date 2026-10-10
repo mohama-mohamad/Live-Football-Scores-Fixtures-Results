@@ -124,12 +124,14 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
     )
       .bind(sub.endpoint, sub.p256dh, sub.auth, JSON.stringify(prefs), now)
       .run();
+    svc.invalidatePriorityTeams();
     return json({ ok: true, prefs });
   }
 
   if (method === 'POST' && path === '/api/push/unsubscribe') {
     const body = await readJson(req);
     await env.DB.prepare('DELETE FROM subscriptions WHERE endpoint = ?').bind(String(body.endpoint ?? '')).run();
+    svc.invalidatePriorityTeams();
     return json({ ok: true });
   }
 
