@@ -40,32 +40,36 @@ jobs:
           echo '{}' > payload.json
           add() { jq -c "$1" --slurpfile v "$2" ${3:+--arg k "$3"} payload.json > p.tmp && mv p.tmp payload.json; }
 
-          # التفاصيل الكاملة (أحداث + إحصائيات + تشكيلة): 20 مباراة لكل طلب
-          echo '[]' > full.json
-          for chunk in $(echo "$plan" | jq -r '.full | [range(0; length; 20) as $i | .[$i:$i+20] | join("-")] | .[]'); do
-            api "/fixtures?ids=$chunk" > f.json
-            if ok < f.json; then
-              # بيانات اللاعبين الفردية غير مستخدمة وكبيرة الحجم
-              jq -c '[.response[] | {fixture, league, teams, goals, score, events, lineups, statistics}]' f.json > v.json
-              jq -c -s 'add' full.json v.json > p.tmp && mv p.tmp full.json
-            else
-              echo "::warning::التفاصيل: $(jq -c '.errors' f.json 2>/dev/null)"
-            fi
-          done
-          if [ "$(jq length full.json)" != 0 ]; then add '.full = $v[0]' full.json; echo "تفاصيل: $(jq length full.json)"; fi
-
+          days=$(echo "$plan" | jq -r '.days | join(" ")')
           if [ "$(echo "$plan" | jq -r '.live')" = true ]; then
             ids=$(echo "$leagues" | jq -r 'join("-")')
             api "/fixtures?live=$ids" > live.json
             if ok < live.json; then
               jq -c '.response' live.json > v.json && add '.live = $v[0]' v.json
               echo "مباشر: $(jq length v.json)"
+              # مباريات كانت جارية واختفت من المباشر: قائمة يومها تعطي النتيجة النهائية
+              extra=$(echo "$plan" | jq -r --slurpfile v v.json '($v[0] | map(.fixture.id | tostring)) as $live | .openDays | to_entries | map(select(.key as $k | $live | index($k) | not) | .value) | unique | join(" ")')
+              [ -n "$extra" ] && days=$(echo $days $extra | tr ' ' '\n' | sort -u | tr '\n' ' ')
             else
               echo "::warning::المباشر: $(jq -c '.errors' live.json 2>/dev/null)"
             fi
           fi
 
-          for d in $(echo "$plan" | jq -r '.days[]'); do
+          # التفاصيل الكاملة (أحداث + إحصائيات + تشكيلة): مباراة واحدة لكل طلب في الخطة المجانية
+          echo '[]' > full.json
+          for id in $(echo "$plan" | jq -r '.full[]'); do
+            api "/fixtures?id=$id" > f.json
+            if ok < f.json; then
+              # بيانات اللاعبين الفردية غير مستخدمة وكبيرة الحجم
+              jq -c '[.response[] | {fixture, league, teams, goals, score, events, lineups, statistics}]' f.json > v.json
+              jq -c -s 'add' full.json v.json > p.tmp && mv p.tmp full.json
+            else
+              echo "::warning::التفاصيل $id: $(jq -c '.errors' f.json 2>/dev/null)"
+            fi
+          done
+          if [ "$(jq length full.json)" != 0 ]; then add '.full = $v[0]' full.json; echo "تفاصيل: $(jq length full.json)"; fi
+
+          for d in $days; do
             api "/fixtures?date=$d&timezone=UTC" > day.json
             if ok < day.json; then
               jq -c --argjson L "$leagues" '[.response[] | select(.league.id as $l | $L | index($l))]' day.json > v.json

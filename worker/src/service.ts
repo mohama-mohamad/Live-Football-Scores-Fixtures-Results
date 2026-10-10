@@ -230,18 +230,13 @@ export async function isKnownMatch(env: Env, id: number): Promise<boolean> {
   return !!row;
 }
 
-// الإحصائيات والتشكيلة (والأحداث لمباريات football-data.org) التي جلبها وسيط GitHub
+// الإحصائيات والتشكيلة التي جلبها وسيط GitHub
 async function withExtra(env: Env, id: number, data: MatchDetails | null): Promise<MatchDetails | null> {
   if (!data) return data;
   const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind(`extra:${id}`).first<{ value: string }>();
   if (!row) return data;
-  const x = JSON.parse(row.value) as Pick<MatchDetails, 'stats' | 'lineups' | 'events'>;
-  return {
-    ...data,
-    stats: data.stats?.length ? data.stats : x.stats,
-    lineups: data.lineups?.length ? data.lineups : x.lineups,
-    events: data.events?.length ? data.events : x.events,
-  };
+  const x = JSON.parse(row.value) as Pick<MatchDetails, 'stats' | 'lineups'>;
+  return { ...data, stats: data.stats?.length ? data.stats : x.stats, lineups: data.lineups?.length ? data.lineups : x.lineups };
 }
 
 export async function matchDetails(env: Env, id: number) {
@@ -254,6 +249,8 @@ export async function matchDetails(env: Env, id: number) {
     // أثناء المباراة: أحدث نتيجة من المتابعة المباشرة
     const s = (await loadStates(env, [id])).get(id);
     if (data && s && s.updatedAt > r.fetchedAt) data = { ...data, ...s.match };
+    // الأحداث (من وسيط API-Football) محفوظة في حالة المباراة فقط
+    if (data && s && !data.events?.length && s.match.events?.length) data = { ...data, events: s.match.events };
     return { data: await withExtra(env, id, data), stale: r.stale, provider: 'football-data' };
   }
   if (relayOnly(env) && p.limited) {

@@ -111,7 +111,9 @@ function Hero({ m }: { m: MatchDetails }) {
 
 // مباريات football-data.org (الخطة المجانية): النتيجة فقط، بدون أحداث أو تشكيلة أو إحصائيات
 const basicOnly = (m: MatchDetails) => m.id >= SECONDARY_MATCH_OFFSET;
-const BASIC_NOTE = 'النتيجة لهذه البطولة تتحدّث كل دقيقة، أما الأحداث والإحصائيات والتشكيلة فتصل من مصدر إضافي كل 15 دقيقة تقريباً ولم تصل بعد.';
+const BASIC_NOTE = 'النتيجة لهذه البطولة تتحدّث كل دقيقة، أما الأحداث فتصل من مصدر إضافي كل 15 دقيقة تقريباً ولم تصل بعد.';
+// الخطة المجانية: الإحصائيات والتشكيلة تُجلب لكل مباراة بطلب مستقل، فنقتصر على ما يتابعه المستخدم
+const DETAIL_NOTE = 'تُجلب للمباريات التي تفتح صفحتها ولمباريات فرقك المفضلة، وتصل خلال 15 دقيقة تقريباً وتتحدّث تلقائياً.';
 
 function Events({ m }: { m: MatchDetails }) {
   const list = [...(m.events ?? [])].sort((a, b) => b.minute - a.minute || (b.extra ?? 0) - (a.extra ?? 0));
@@ -164,8 +166,7 @@ function Events({ m }: { m: MatchDetails }) {
 const num = (v: number | string | null) => (v == null ? 0 : typeof v === 'number' ? v : parseFloat(v) || 0);
 
 function Stats({ m }: { m: MatchDetails }) {
-  if (!m.stats?.length && basicOnly(m)) return <Empty icon="ℹ️" title="الإحصائيات غير متاحة">{BASIC_NOTE}</Empty>;
-  if (!m.stats?.length) return <Empty icon="📊" title="الإحصائيات غير متوفرة بعد" />;
+  if (!m.stats?.length) return <Empty icon="📊" title="الإحصائيات غير متوفرة بعد">{m.status === 'scheduled' ? 'تبدأ مع انطلاق المباراة' : DETAIL_NOTE}</Empty>;
   return (
     <div className="stats">
       <div className="stats-head">
@@ -236,8 +237,7 @@ function TeamLineup({ l, team }: { l: Lineup; team: Team }) {
 }
 
 function Lineups({ m }: { m: MatchDetails }) {
-  if (!m.lineups?.length && basicOnly(m)) return <Empty icon="ℹ️" title="التشكيلة غير متاحة">{BASIC_NOTE}</Empty>;
-  if (!m.lineups?.length) return <Empty icon="👕" title="التشكيلة لم تُعلن بعد" >تُعلن عادةً قبل المباراة بساعة تقريباً</Empty>;
+  if (!m.lineups?.length) return <Empty icon="👕" title="التشكيلة غير متوفرة بعد">تُعلن عادةً قبل المباراة بساعة تقريباً. {DETAIL_NOTE}</Empty>;
   const team = (id: number) => (id === m.home.id ? m.home : m.away);
   return (
     <>

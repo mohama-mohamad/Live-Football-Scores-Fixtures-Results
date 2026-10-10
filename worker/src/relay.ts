@@ -23,7 +23,11 @@ export const relayMode = (env: Env) => env.AF_VIA_RELAY === 'true' && !!env.API_
 const enc = new TextEncoder();
 const MAX_AGE_MS = 15 * 60_000;
 const LINEUP_LOOKAHEAD_MS = 60 * 60_000;
-export const FULL_CHUNK = 20;
+const VIEW_TTL_MS = 30 * 60_000;
+const DETAIL_REFRESH_MS = 10 * 60_000;
+// طلبات التفاصيل لكل تشغيل، وما نحتفظ به من الحد اليومي للمتابعة المباشرة
+const DETAIL_PER_RUN = 2;
+const DETAIL_RESERVE = 12;
 
 export async function verifySignature(secret: string, body: string, signatureHex: string): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/i.test(signatureHex)) return false;
@@ -60,7 +64,7 @@ export async function relayPlan(env: Env, now = Date.now()) {
   const af: Match[] = [];
   for (const d of [utcDate(now - DAY_MS), today]) af.push(...((await cachedValue<Match[]>(env, `date:${d}`))?.value ?? []));
   const fd = (await cachedValue<Match[]>(env, `fd:date:${today}`))?.value ?? [];
-  const { results: open } = await env.DB.prepare(`SELECT id FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{ id: number }>();
+  const { results: open } = await env.DB.prepare(`SELECT id, kickoff FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{ id: number; kickoff: number }>();
   const states = await loadStates(env, [...af, ...fd].map((m) => m.id));
   const cur = (m: Match) => states.get(m.id)?.match ?? m;
   const inWindow = (m: Match) => {
@@ -69,19 +73,59 @@ export async function relayPlan(env: Env, now = Date.now()) {
   };
   const active = open.length > 0 || af.some(inWindow) || fd.some(inWindow);
   const liveLeft = budgetCap(env, 'live') - (await usageFor(env, 'live'));
-  const go = active && liveLeft > 1;
 
-  // التفاصيل الكاملة (أحداث + إحصائيات + تشكيلة) للمباريات الجارية والقريبة (التشكيلة تُعلن قبل ساعة تقريباً)
+  // التفاصيل الكاملة (إحصائيات + تشكيلة): الخطة المجانية لا تسمح بعدة مباريات في طلب واحد،
+  // فنكتفي بمباريات الفرق المفضلة والمباريات التي فُتحت صفحتها مؤخراً
   const fav = await priorityTeams(env, now);
+  const viewed = await recentViews(env, now);
+  const fdById = new Map(fd.map((m) => [m.id, m]));
+  const viewedPairs = new Set([...viewed].map((id) => fdById.get(id)).filter((m): m is Match => !!m).map(pairKey));
+  const isViewed = (m: Match) => viewed.has(m.id) || viewedPairs.has(pairKey(m));
+  const isFav = (m: Match) => isFavTeam(fav, m.home) || isFavTeam(fav, m.away);
   const soon = (m: Match) => cur(m).status === 'scheduled' && Date.parse(m.kickoff) - now < LINEUP_LOOKAHEAD_MS && Date.parse(m.kickoff) > now - MATCH_MS;
-  const rank = (m: Match) => (isFavTeam(fav, m.home) || isFavTeam(fav, m.away) ? 0 : inWindow(m) ? 1 : 2);
-  const wanted = af.filter((m) => inWindow(m) || soon(m)).sort((a, b) => rank(a) - rank(b));
-  const ids = [...new Set([...open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => r.id), ...wanted.map((m) => m.id)])];
-  // طلب واحد لكل 20 مباراة؛ طلبان كحد أقصى
-  const max = liveLeft > 4 ? 2 * FULL_CHUNK : FULL_CHUNK;
-  const full = go ? ids.slice(0, max) : [];
-  // إن لم نعرف أي مباراة (قائمة اليوم غير متوفرة) نسأل عن المباشر عموماً
-  return { leagues, live: go && !full.length, full, days, liveLeft, browseLeft };
+  const cand = af.filter((m) => (inWindow(m) || soon(m)) && (isViewed(m) || isFav(m)));
+  const got = await extraInfo(env, cand.map((m) => m.id));
+  const due = cand.filter((m) => {
+    const x = got.get(m.id);
+    if (!x) return true;
+    // قبل البداية: التشكيلة فقط (لا تتغير بعد إعلانها). أثناء المباراة: تحديث الإحصائيات
+    return soon(m) ? !x.lineups : now - x.at > DETAIL_REFRESH_MS;
+  });
+  due.sort((a, b) => Number(isViewed(b)) - Number(isViewed(a)) || Number(inWindow(b)) - Number(inWindow(a)));
+  const n = Math.max(0, Math.min(DETAIL_PER_RUN, liveLeft - 1 - DETAIL_RESERVE));
+  const full = due.slice(0, n).map((m) => m.id);
+
+  const live = active && liveLeft > 1;
+  // مباريات API-Football كانت جارية: إن اختفت من المباشر نجلب قائمة يومها لمعرفة النتيجة النهائية
+  const openDays = Object.fromEntries(open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => [r.id, utcDate(r.kickoff)]));
+  return { leagues, live, full, openDays: live ? openDays : {}, days, liveLeft, browseLeft };
+}
+
+// صفحات المباريات المفتوحة (لجلب تفاصيلها عبر الوسيط)
+export async function noteView(env: Env, id: number, now = Date.now()): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO cache (key, value, fetched_at, expires_at) VALUES (?1, '1', ?2, ?3)
+     ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at, expires_at = excluded.expires_at WHERE cache.fetched_at < ?2 - 300000`,
+  )
+    .bind(`view:${id}`, now, now + VIEW_TTL_MS)
+    .run();
+}
+
+async function recentViews(env: Env, now: number): Promise<Set<number>> {
+  const { results } = await env.DB.prepare(`SELECT key FROM cache WHERE key LIKE 'view:%' AND expires_at > ?`).bind(now).all<{ key: string }>();
+  return new Set(results.map((r) => Number(r.key.slice(5))));
+}
+
+async function extraInfo(env: Env, ids: number[]): Promise<Map<number, { at: number; lineups: boolean }>> {
+  const out = new Map<number, { at: number; lineups: boolean }>();
+  if (!ids.length) return out;
+  const { results } = await env.DB.prepare(
+    `SELECT key, fetched_at, instr(value, '"startXI":[{') > 0 AS lu FROM cache WHERE key IN (${ids.map(() => '?').join(',')})`,
+  )
+    .bind(...ids.map((id) => `extra:${id}`))
+    .all<{ key: string; fetched_at: number; lu: number }>();
+  for (const r of results) out.set(Number(r.key.slice(6)), { at: r.fetched_at, lineups: !!r.lu });
+  return out;
 }
 
 // ---------- الاستقبال ----------
@@ -90,7 +134,7 @@ export interface RelayBody {
   ts: number;
   live?: Json[] | null;
   finals?: Json[] | null;
-  // fixtures?ids= : أحداث + إحصائيات + تشكيلة
+  // fixtures?id= (مباراة لكل طلب): أحداث + إحصائيات + تشكيلة
   full?: Json[] | null;
   days?: Record<string, Json[]>;
 }
@@ -104,13 +148,14 @@ function maxScore(a: Match['score'], b: Match['score']): Match['score'] {
 }
 
 // الإحصائيات والتشكيلة (لا تُحفظ في حالة المباراة) — تُقرأ عند فتح صفحة المباراة
-function extraStmt(env: Env, id: number, m: MatchDetails, now: number, events?: MatchEvent[]): D1PreparedStatement | null {
-  if (!m.stats?.length && !m.lineups?.length && !events?.length) return null;
+function extraStmt(env: Env, id: number, m: MatchDetails, now: number): D1PreparedStatement | null {
+  // ردود المباشر لا تحمل الإحصائيات والتشكيلة: لا نستبدل ما حُفظ سابقاً
+  if (!m.stats?.length && !m.lineups?.length) return null;
   const ttl = m.status === 'finished' ? 7 * DAY_MS : 12 * 3600_000;
   return env.DB.prepare(
     `INSERT INTO cache (key, value, fetched_at, expires_at) VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`,
-  ).bind(`extra:${id}`, JSON.stringify({ stats: m.stats ?? [], lineups: m.lineups ?? [], events: events ?? [] }), now, now + ttl);
+  ).bind(`extra:${id}`, JSON.stringify({ stats: m.stats ?? [], lineups: m.lineups ?? [] }), now, now + ttl);
 }
 
 // يضيف أحداث API-Football (الهدافون، البطاقات...) إلى مباريات football-data.org المقابلة
@@ -137,7 +182,7 @@ async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extr
     const events: MatchEvent[] = (af.events ?? []).map((e) => ({ ...e, teamId: teamMap.get(e.teamId) ?? e.teamId }));
     const finished = af.status === 'finished' || fd.status === 'finished';
     const lineups = af.lineups?.map((l) => ({ ...l, teamId: teamMap.get(l.teamId) ?? l.teamId }));
-    const x = extraStmt(env, fd.id, { ...af, lineups }, now, events);
+    const x = extraStmt(env, fd.id, { ...af, lineups }, now);
     if (x) extras.push(x);
     merged.push({
       ...fd,
@@ -154,13 +199,15 @@ async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extr
 export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
   const p = getProvider(env, 'browse');
   const days = body.days ?? {};
-  await addUsage(env, 'live', (body.live ? 1 : 0) + (body.finals?.length ? 1 : 0) + Math.ceil((body.full?.length ?? 0) / FULL_CHUNK));
+  await addUsage(env, 'live', (body.live ? 1 : 0) + (body.finals?.length ? 1 : 0) + (body.full?.length ?? 0));
   await addUsage(env, 'browse', Object.keys(days).length);
 
   // قوائم الأيام
+  const dayLists: Match[][] = [];
   for (const [date, raw] of Object.entries(days)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(raw)) continue;
     const list = raw.map((f) => slim(normFixture(f)));
+    dayLists.push(list);
     await env.DB.prepare(
       `INSERT INTO cache (key, value, fetched_at, expires_at) VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`,
@@ -173,7 +220,21 @@ export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
   // المباشر
   const notices: Notice[] = [];
   const extras: D1PreparedStatement[] = [];
-  const live = [...(body.live ?? []), ...(body.finals ?? []), ...(body.full ?? [])].map((f) => normFixture(f));
+  const byId = new Map<number, MatchDetails>();
+  for (const f of [...(body.live ?? []), ...(body.finals ?? []), ...(body.full ?? [])]) {
+    const m = normFixture(f);
+    byId.set(m.id, m);
+  }
+  // مباريات جارية عندنا اختفت من المباشر: نتيجتها النهائية من قائمة يومها
+  const { results: open } = await env.DB.prepare(`SELECT id FROM match_state WHERE id < ?1 AND status IN ('live','halftime','penalties')`)
+    .bind(FD_MATCH_OFFSET)
+    .all<{ id: number }>();
+  for (const r of open) {
+    if (byId.has(r.id)) continue;
+    const m = dayLists.flat().find((x) => x.id === r.id);
+    if (m && !inPlay(m)) byId.set(m.id, m);
+  }
+  const live = [...byId.values()];
   if (live.length) {
     await recordTeams(env, live, now);
     const sec = new Set(secondaryLeagues(env));

@@ -8,7 +8,7 @@ import { ProviderError } from './providers/types';
 import { isValidTimeZone } from './time';
 import { b64urlDecode, isAllowedEndpoint, sendPush } from './push/webpush';
 import * as svc from './service';
-import { RELAY_MAX_AGE_MS, lastRelay, relayIngest, relayPlan, verifySignature, type RelayBody } from './relay';
+import { RELAY_MAX_AGE_MS, lastRelay, noteView, relayIngest, relayMode, relayPlan, verifySignature, type RelayBody } from './relay';
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -102,6 +102,8 @@ async function handleApi(req: Request, env: Env, ctx: ExecutionContext, url: URL
   if (method === 'GET' && (m = path.match(/^\/api\/match\/(\d+)$/))) {
     const r = await svc.matchDetails(env, Number(m[1]));
     if (!r.data) throw new HttpError(404, 'المباراة غير موجودة');
+    // نطلب من وسيط GitHub تفاصيل المباريات التي يتابعها المستخدم (الإحصائيات والتشكيلة)
+    if (relayMode(env) && r.data.status !== 'finished') ctx.waitUntil(noteView(env, r.data.id).catch(() => {}));
     return envelope(r, 'max-age=10');
   }
 
