@@ -203,7 +203,10 @@ export class ApiFootballProvider implements Provider {
     await this.hooks.onRequest?.();
     const url = new URL(BASE + path);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-    const res = await this.fetcher(url.toString(), { headers: { 'x-apisports-key': this.key } });
+    // ترويسة User-Agent واضحة: fetch في Workers لا يرسل واحدة افتراضياً، وبعض طبقات الحماية ترفض الطلبات بدونها
+    const res = await this.fetcher(url.toString(), {
+      headers: { 'x-apisports-key': this.key, 'User-Agent': 'koora-live/1.0 (+https://github.com/mohama-mohamad/Live-Football-Scores-Fixtures-Results)', Accept: 'application/json' },
+    });
     // مركز Cloudflare الذي خرج منه الطلب (آخر 3 أحرف من cf-ray)
     this.lastColo = (res.headers.get('cf-ray') ?? '').split('-')[1] ?? '';
     if (!res.ok) throw new ProviderError(`API-Football HTTP ${res.status}`);

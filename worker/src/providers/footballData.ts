@@ -89,7 +89,7 @@ export class FootballDataClient {
 
   private async get(path: string): Promise<Json> {
     await this.beforeRequest();
-    const res = await this.fetcher(BASE + path, { headers: { 'X-Auth-Token': this.key } });
+    const res = await this.fetcher(BASE + path, { headers: { 'X-Auth-Token': this.key, 'User-Agent': 'koora-live/1.0', Accept: 'application/json' } });
     const body: Json = await res.json().catch(() => ({}));
     if (!res.ok) throw new ProviderError(`football-data.org: ${body?.message ?? `HTTP ${res.status}`}`, res.status === 429 ? 503 : 502);
     return body;
