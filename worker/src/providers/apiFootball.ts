@@ -195,7 +195,8 @@ export class ApiFootballProvider implements Provider {
       // ذاكرة مؤقتة للقيم التي نادراً ما تتغير (مثل الموسم الحالي)
       memo?: <T>(key: string, ttlSec: number, fn: () => Promise<T>) => Promise<T>;
     } = {},
-    private fetcher: typeof fetch = fetch,
+    // ملاحظة: في Workers يجب ألا يُستدعى fetch كدالة على كائن آخر (Illegal invocation)، لذلك نغلّفه
+    private fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   private async fetchText(path: string, params: Record<string, string | number>): Promise<string> {

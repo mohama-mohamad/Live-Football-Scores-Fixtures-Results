@@ -164,7 +164,7 @@ export async function sendPush(
   payload: unknown,
   keys: VapidKeys,
   opts: PushOptions = {},
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
 ): Promise<PushResult> {
   const body = await encryptPayload(target, enc.encode(JSON.stringify(payload)));
   const headers: Record<string, string> = {

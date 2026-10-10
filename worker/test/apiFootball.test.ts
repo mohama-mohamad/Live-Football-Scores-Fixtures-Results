@@ -83,3 +83,20 @@ describe('extractTracked (large responses)', () => {
     expect(extractTracked(reordered)).toHaveLength(80);
   });
 });
+
+describe('default fetcher binding', () => {
+  it('does not call fetch with the provider as `this` (Workers throws "Illegal invocation")', async () => {
+    const original = globalThis.fetch;
+    let receiver: unknown = 'unset';
+    globalThis.fetch = function (this: unknown) {
+      receiver = this;
+      return Promise.resolve(new Response(JSON.stringify({ errors: [], response: [] })));
+    } as typeof fetch;
+    try {
+      await new ApiFootballProvider('k').live();
+      expect(receiver === undefined || receiver === globalThis).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
