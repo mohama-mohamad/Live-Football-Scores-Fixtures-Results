@@ -148,7 +148,12 @@ jobs:
           [ -n "$url" ] || { echo "::warning::لم يُعثر على رابط workers.dev"; exit 0; }
           sleep 5
           check() {
-            code=$(curl -s -o /tmp/body -w '%{http_code}' --retry 3 --retry-delay 3 "$url$1")
+            # النسخة الجديدة قد تحتاج ثوانٍ لتصل لكل الخوادم: نعيد المحاولة قبل اعتبارها فشلاً
+            for attempt in 1 2 3 4 5; do
+              code=$(curl -s -o /tmp/body -w '%{http_code}' --retry 3 --retry-delay 3 "$url$1")
+              [ "$code" = "200" ] && break
+              sleep 8
+            done
             type=$(curl -s -o /dev/null -w '%{content_type}' "$url$1")
             echo "$1 -> $code ($type)"
             [ "$code" = "200" ] || { cat /tmp/body; exit 1; }
