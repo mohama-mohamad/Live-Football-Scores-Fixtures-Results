@@ -299,6 +299,8 @@ const RAW: Record<string, string> = {
 
 // معرّفات فرق football-data.org تُزاح بهذا المقدار (لا تتداخل مع معرّفات API-Football)
 export const SECONDARY_TEAM_OFFSET = 50_000_000;
+// ومعرّفات مبارياته (football-data.org) بهذا المقدار
+export const SECONDARY_MATCH_OFFSET = 900_000_000;
 
 export function normalizeName(name: string): string {
   return name

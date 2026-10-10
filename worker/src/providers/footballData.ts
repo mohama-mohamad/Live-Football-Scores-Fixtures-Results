@@ -4,11 +4,11 @@
 // - معرّف المباراة = FD_MATCH_OFFSET + المعرّف الأصلي (لتمييزها عند فتح التفاصيل)
 // - معرّف الفريق = FD_TEAM_OFFSET + المعرّف الأصلي، ثم يستبدله الخادم بمعرّف API-Football إن عرفه (بالاسم)
 import type { League, Match, MatchDetails, MatchStatus, Standings } from '../../../shared/types';
-import { SECONDARY_TEAM_OFFSET } from '../../../shared/teams';
+import { SECONDARY_MATCH_OFFSET, SECONDARY_TEAM_OFFSET } from '../../../shared/teams';
 import { ProviderError } from './types';
 
 const BASE = 'https://api.football-data.org/v4';
-export const FD_MATCH_OFFSET = 900_000_000;
+export const FD_MATCH_OFFSET = SECONDARY_MATCH_OFFSET;
 export const FD_TEAM_OFFSET = SECONDARY_TEAM_OFFSET;
 
 // رموز بطولات football-data.org ← معرّفات API-Football المستخدمة في التطبيق
@@ -52,7 +52,18 @@ const team = (t: Json) => ({
   logo: t?.crest ?? undefined,
 });
 
-export function normFdMatch(m: Json): MatchDetails | null {
+// الخطة المجانية لا تُرجع الدقيقة: نقدّرها من وقت البداية (شوط أول 45 + استراحة ~15 دقيقة)
+export function estimateMinute(status: MatchStatus, kickoff: string, now = Date.now()): number | null {
+  if (status === 'halftime') return 45;
+  if (status !== 'live') return null;
+  const elapsed = Math.floor((now - Date.parse(kickoff)) / 60_000);
+  if (elapsed < 0) return 1;
+  if (elapsed <= 47) return Math.max(1, elapsed);
+  if (elapsed < 62) return 45; // بدل ضائع طويل في الشوط الأول، أو بداية الثاني
+  return Math.min(90, elapsed - 17);
+}
+
+export function normFdMatch(m: Json, now = Date.now()): MatchDetails | null {
   const leagueId = LEAGUE_BY_CODE[m?.competition?.code];
   if (!leagueId) return null;
   const status = STATUS[m.status] ?? 'unknown';
@@ -67,7 +78,7 @@ export function normFdMatch(m: Json): MatchDetails | null {
     kickoff: new Date(m.utcDate).toISOString(),
     status,
     statusShort: m.status,
-    minute: typeof m.minute === 'number' ? m.minute : null,
+    minute: typeof m.minute === 'number' ? m.minute : estimateMinute(status, m.utcDate, now),
     home: team(m.homeTeam),
     away: team(m.awayTeam),
     score: started ? { home: ft.home ?? 0, away: ft.away ?? 0 } : { home: null, away: null },
@@ -101,14 +112,14 @@ export class FootballDataClient {
     const body = await this.get(`/matches?dateFrom=${date}&dateTo=${next}`);
     return (body.matches ?? [])
       .filter((m: Json) => String(m.utcDate).slice(0, 10) === date)
-      .map(normFdMatch)
+      .map((x: Json) => normFdMatch(x))
       .filter(isMatch);
   }
 
   // المباريات الجارية الآن في البطولات المدعومة
   async live(): Promise<Match[]> {
     const body = await this.get('/matches?status=IN_PLAY,PAUSED,LIVE');
-    return (body.matches ?? []).map(normFdMatch).filter(isMatch);
+    return (body.matches ?? []).map((x: Json) => normFdMatch(x)).filter(isMatch);
   }
 
   // مباريات بمعرّفاتنا (المُزاحة) — لمعرفة نتيجة مباراة اختفت من قائمة المباشر
@@ -116,14 +127,14 @@ export class FootballDataClient {
     const raw = ids.map((id) => id - FD_MATCH_OFFSET).filter((id) => id > 0);
     if (!raw.length) return [];
     const body = await this.get(`/matches?ids=${raw.join(',')}`);
-    return (body.matches ?? []).map(normFdMatch).filter(isMatch);
+    return (body.matches ?? []).map((x: Json) => normFdMatch(x)).filter(isMatch);
   }
 
   async competitionMatches(leagueId: number, from: string, to: string): Promise<Match[]> {
     const code = FD_CODES[leagueId];
     if (!code) return [];
     const body = await this.get(`/competitions/${code}/matches?dateFrom=${from}&dateTo=${to}`);
-    return (body.matches ?? []).map(normFdMatch).filter(isMatch);
+    return (body.matches ?? []).map((x: Json) => normFdMatch(x)).filter(isMatch);
   }
 
   async match(fdId: number): Promise<MatchDetails | null> {

@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { leagueName } from '../../../shared/leagues';
-import { teamName } from '../../../shared/teams';
+import { SECONDARY_MATCH_OFFSET, teamName } from '../../../shared/teams';
 import type { Lineup, MatchDetails, MatchEvent, Team } from '../../../shared/types';
 import { useMatch } from '../api/client';
 import { StarIcon } from '../components/Icons';
@@ -109,8 +109,13 @@ function Hero({ m }: { m: MatchDetails }) {
   );
 }
 
+// مباريات football-data.org (الخطة المجانية): النتيجة فقط، بدون أحداث أو تشكيلة أو إحصائيات
+const basicOnly = (m: MatchDetails) => m.id >= SECONDARY_MATCH_OFFSET;
+const BASIC_NOTE = 'مصدر بيانات هذه البطولة في الخطة المجانية يوفّر النتيجة فقط، دون الهدافين والبطاقات والتبديلات والتشكيلة والإحصائيات.';
+
 function Events({ m }: { m: MatchDetails }) {
   const list = [...(m.events ?? [])].sort((a, b) => b.minute - a.minute || (b.extra ?? 0) - (a.extra ?? 0));
+  if (!list.length && basicOnly(m) && m.status !== 'scheduled') return <Empty icon="ℹ️" title="تفاصيل الأحداث غير متاحة">{BASIC_NOTE}</Empty>;
   if (!list.length) return <Empty icon="⏱️" title={m.status === 'scheduled' ? 'لم تبدأ المباراة بعد' : 'لا توجد أحداث'} />;
   const htIndex = list.findIndex((e) => e.minute <= 45);
   return (
@@ -159,6 +164,7 @@ function Events({ m }: { m: MatchDetails }) {
 const num = (v: number | string | null) => (v == null ? 0 : typeof v === 'number' ? v : parseFloat(v) || 0);
 
 function Stats({ m }: { m: MatchDetails }) {
+  if (!m.stats?.length && basicOnly(m)) return <Empty icon="ℹ️" title="الإحصائيات غير متاحة">{BASIC_NOTE}</Empty>;
   if (!m.stats?.length) return <Empty icon="📊" title="الإحصائيات غير متوفرة بعد" />;
   return (
     <div className="stats">
@@ -230,6 +236,7 @@ function TeamLineup({ l, team }: { l: Lineup; team: Team }) {
 }
 
 function Lineups({ m }: { m: MatchDetails }) {
+  if (!m.lineups?.length && basicOnly(m)) return <Empty icon="ℹ️" title="التشكيلة غير متاحة">{BASIC_NOTE}</Empty>;
   if (!m.lineups?.length) return <Empty icon="👕" title="التشكيلة لم تُعلن بعد" >تُعلن عادةً قبل المباراة بساعة تقريباً</Empty>;
   const team = (id: number) => (id === m.home.id ? m.home : m.away);
   return (

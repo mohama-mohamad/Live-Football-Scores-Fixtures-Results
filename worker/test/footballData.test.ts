@@ -120,3 +120,17 @@ describe('football-data live filter', () => {
     expect(statuses.every((s) => allowed.has(s))).toBe(true);
   });
 });
+
+describe('estimateMinute', () => {
+  it('estimates the match minute from kickoff when the free tier omits it', async () => {
+    const { estimateMinute } = await import('../src/providers/footballData');
+    const ko = '2026-10-10T16:30:00Z';
+    const at = (min: number) => Date.parse(ko) + min * 60_000;
+    expect(estimateMinute('live', ko, at(23))).toBe(23);
+    expect(estimateMinute('halftime', ko, at(50))).toBe(45);
+    expect(estimateMinute('live', ko, at(55))).toBe(45);
+    expect(estimateMinute('live', ko, at(80))).toBe(63);
+    expect(estimateMinute('live', ko, at(130))).toBe(90);
+    expect(estimateMinute('scheduled', ko, at(-5))).toBeNull();
+  });
+});
