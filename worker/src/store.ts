@@ -41,7 +41,8 @@ export async function setMeta(env: Env, key: string, value: string): Promise<voi
 export type BudgetPurpose = 'live' | 'browse';
 export function budgetCap(env: Env, purpose: BudgetPurpose): number {
   const limit = dailyLimit(env);
-  const live = Math.ceil(limit * 0.6);
+  // مع وسيط GitHub تحتاج قوائم الأيام نحو 20 طلباً فقط، فنعطي المتابعة المباشرة حصة أكبر
+  const live = Math.ceil(limit * (env.AF_VIA_RELAY === 'true' ? 0.75 : 0.6));
   return purpose === 'live' ? live : limit - live;
 }
 

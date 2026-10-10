@@ -8,7 +8,7 @@ import { LEAGUES } from '../../shared/leagues';
 import { teamKey } from '../../shared/teams';
 import type { Env } from './env';
 import { normFixture, slim } from './providers/apiFootball';
-import { MATCH_MS, matchWindow } from './plan';
+import { MATCH_MS, computePlan, matchWindow, type TimeWindow } from './plan';
 import { FD_MATCH_OFFSET, recordTeams, secondaryLeagues } from './secondary';
 import { budgetCap, getMeta, setMeta, usageFor } from './store';
 import { DAY_MS, utcDate } from './time';
@@ -27,7 +27,9 @@ const VIEW_TTL_MS = 30 * 60_000;
 const DETAIL_REFRESH_MS = 10 * 60_000;
 // طلبات التفاصيل لكل تشغيل، وما نحتفظ به من الحد اليومي للمتابعة المباشرة
 const DETAIL_PER_RUN = 2;
-const DETAIL_RESERVE = 12;
+// تقدير طلبات التفاصيل لمباراة متابَعة (تشكيلة قبل البداية + إحصائيات كل 10 دقائق)
+const DETAILS_PER_MATCH = 14;
+const MAX_WAIT_MS = 30 * 60_000;
 
 export async function verifySignature(secret: string, body: string, signatureHex: string): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/i.test(signatureHex)) return false;
@@ -67,38 +69,67 @@ export async function relayPlan(env: Env, now = Date.now()) {
   const { results: open } = await env.DB.prepare(`SELECT id, kickoff FROM match_state WHERE status IN ('live','halftime','penalties')`).all<{ id: number; kickoff: number }>();
   const states = await loadStates(env, [...af, ...fd].map((m) => m.id));
   const cur = (m: Match) => states.get(m.id)?.match ?? m;
-  const inWindow = (m: Match) => {
-    const w = matchWindow(cur(m), now);
-    return !!w && w.start <= now && now < w.end;
-  };
-  const active = open.length > 0 || af.some(inWindow) || fd.some(inWindow);
   const liveLeft = budgetCap(env, 'live') - (await usageFor(env, 'live'));
 
-  // التفاصيل الكاملة (إحصائيات + تشكيلة): الخطة المجانية لا تسمح بعدة مباريات في طلب واحد،
-  // فنكتفي بمباريات الفرق المفضلة والمباريات التي فُتحت صفحتها مؤخراً
+  // المباريات التي يتابعها المستخدم: فرقه المفضلة + المباريات التي فتح صفحتها مؤخراً
   const fav = await priorityTeams(env, now);
   const viewed = await recentViews(env, now);
   const fdById = new Map(fd.map((m) => [m.id, m]));
   const viewedPairs = new Set([...viewed].map((id) => fdById.get(id)).filter((m): m is Match => !!m).map(pairKey));
-  const isViewed = (m: Match) => viewed.has(m.id) || viewedPairs.has(pairKey(m));
-  const isFav = (m: Match) => isFavTeam(fav, m.home) || isFavTeam(fav, m.away);
-  const soon = (m: Match) => cur(m).status === 'scheduled' && Date.parse(m.kickoff) - now < LINEUP_LOOKAHEAD_MS && Date.parse(m.kickoff) > now - MATCH_MS;
-  const cand = af.filter((m) => (inWindow(m) || soon(m)) && (isViewed(m) || isFav(m)));
-  const got = await extraInfo(env, cand.map((m) => m.id));
-  const due = cand.filter((m) => {
-    const x = got.get(m.id);
-    if (!x) return true;
-    // قبل البداية: التشكيلة فقط (لا تتغير بعد إعلانها). أثناء المباراة: تحديث الإحصائيات
-    return soon(m) ? !x.lineups : now - x.at > DETAIL_REFRESH_MS;
-  });
-  due.sort((a, b) => Number(isViewed(b)) - Number(isViewed(a)) || Number(inWindow(b)) - Number(inWindow(a)));
-  const n = Math.max(0, Math.min(DETAIL_PER_RUN, liveLeft - 1 - DETAIL_RESERVE));
-  const full = due.slice(0, n).map((m) => m.id);
+  const followed = (m: Match) => viewed.has(m.id) || viewedPairs.has(pairKey(m)) || isFavTeam(fav, m.home) || isFavTeam(fav, m.away);
 
-  const live = active && liveLeft > 1;
+  const windowOf = (m: Match) => matchWindow(cur(m), now);
+  const isWin = (w: TimeWindow | null): w is TimeWindow => !!w;
+  // حالات جارية لم تعد في القوائم: نتابعها ربع ساعة أخرى
+  const listed = new Set([...af, ...fd].map((m) => m.id));
+  const openWin = open.filter((r) => !listed.has(r.id)).map(() => ({ start: now - 1, end: now + 15 * 60_000 }));
+  const allWindows = [...[...af, ...fd].map(windowOf).filter(isWin), ...openWin];
+  const favWindows = [...af, ...fd].filter(followed).map(windowOf).filter(isWin);
+
+  // الإحصائيات والتشكيلة: طلب مستقل لكل مباراة (الخطة المجانية لا تسمح بعدة مباريات في طلب واحد)
+  const soon = (m: Match) => cur(m).status === 'scheduled' && Date.parse(m.kickoff) - now < LINEUP_LOOKAHEAD_MS && Date.parse(m.kickoff) > now - MATCH_MS;
+  const inWindow = (m: Match) => {
+    const w = windowOf(m);
+    return !!w && w.start <= now;
+  };
+  const cand = af.filter((m) => followed(m) && (inWindow(m) || soon(m)));
+  const got = await extraInfo(env, cand.map((m) => m.id));
+  const dueAt = (m: Match) => {
+    const x = got.get(m.id);
+    if (!x) return now;
+    // قبل البداية: حتى تُعلن التشكيلة فقط
+    if (soon(m) && x.lineups) return Infinity;
+    return x.at + DETAIL_REFRESH_MS;
+  };
+  const due = cand.filter((m) => dueAt(m) <= now).sort((a, b) => Number(inWindow(b)) - Number(inWindow(a)));
+  const full = liveLeft > 1 ? due.slice(0, DETAIL_PER_RUN).map((m) => m.id) : [];
+
+  // تحديث كل المباريات الجارية (النتيجة والأحداث) بطلب واحد؛ وتيرته حسب الرصيد المتبقي
+  const followedLeft = af.filter((m) => followed(m) && windowOf(m)).length;
+  const reserve = Math.min(Math.max(0, liveLeft - 2), followedLeft * DETAILS_PER_MATCH);
+  const p = computePlan({
+    favWindows,
+    allWindows,
+    remaining: liveLeft - reserve,
+    now,
+    slowFloorSec: Math.max(300, Number(env.LIVE_POLL_SECONDS) || 600),
+    fastFloorSec: 120,
+  });
+  const interval = p.mode === 'fast' ? p.fastSec : p.mode === 'slow' ? p.slowSec : null;
+  const lastScan = Number((await getMeta(env, 'relay_scan_at')) ?? 0);
+  const live = interval != null && liveLeft > 1 && now - lastScan >= (interval - 20) * 1000;
+
+  // متى نسأل مجدداً؟
+  const waits: number[] = [];
+  if (interval != null) waits.push(live ? interval * 1000 : lastScan + interval * 1000 - now);
+  for (const m of cand) if (!full.includes(m.id)) waits.push(dueAt(m) - now);
+  for (const w of allWindows) if (w.start > now) waits.push(w.start - now);
+  for (const m of af) if (followed(m)) waits.push(Date.parse(m.kickoff) - LINEUP_LOOKAHEAD_MS - now);
+  const next = Math.round(Math.min(MAX_WAIT_MS, ...waits.filter((w) => w > 0 && Number.isFinite(w))) / 1000);
+
   // مباريات API-Football كانت جارية: إن اختفت من المباشر نجلب قائمة يومها لمعرفة النتيجة النهائية
-  const openDays = Object.fromEntries(open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => [r.id, utcDate(r.kickoff)]));
-  return { leagues, live, full, openDays: live ? openDays : {}, days, liveLeft, browseLeft };
+  const openDays = live && browseLeft > 1 ? Object.fromEntries(open.filter((r) => r.id < FD_MATCH_OFFSET).map((r) => [r.id, utcDate(r.kickoff)])) : {};
+  return { leagues, live, full, openDays, days, next: Math.max(60, next), mode: p.mode, fastSec: p.fastSec, slowSec: p.slowSec, liveLeft, browseLeft };
 }
 
 // صفحات المباريات المفتوحة (لجلب تفاصيلها عبر الوسيط)
@@ -148,9 +179,10 @@ function maxScore(a: Match['score'], b: Match['score']): Match['score'] {
 }
 
 // الإحصائيات والتشكيلة (لا تُحفظ في حالة المباراة) — تُقرأ عند فتح صفحة المباراة
-function extraStmt(env: Env, id: number, m: MatchDetails, now: number): D1PreparedStatement | null {
+// full: رد طلب التفاصيل (يُحفظ دائماً لتسجيل وقت الجلب، حتى قبل إعلان التشكيلة)
+function extraStmt(env: Env, id: number, m: MatchDetails, now: number, full: boolean): D1PreparedStatement | null {
   // ردود المباشر لا تحمل الإحصائيات والتشكيلة: لا نستبدل ما حُفظ سابقاً
-  if (!m.stats?.length && !m.lineups?.length) return null;
+  if (!full && !m.stats?.length && !m.lineups?.length) return null;
   const ttl = m.status === 'finished' ? 7 * DAY_MS : 12 * 3600_000;
   return env.DB.prepare(
     `INSERT INTO cache (key, value, fetched_at, expires_at) VALUES (?1, ?2, ?3, ?4)
@@ -159,7 +191,7 @@ function extraStmt(env: Env, id: number, m: MatchDetails, now: number): D1Prepar
 }
 
 // يضيف أحداث API-Football (الهدافون، البطاقات...) إلى مباريات football-data.org المقابلة
-async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extras: D1PreparedStatement[]): Promise<Notice[]> {
+async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extras: D1PreparedStatement[], fullIds: Set<number>): Promise<Notice[]> {
   if (!list.length) return [];
   const { results } = await env.DB.prepare(`SELECT id, snapshot FROM match_state WHERE id >= ?1 AND kickoff BETWEEN ?2 AND ?3`)
     .bind(FD_MATCH_OFFSET, now - DAY_MS, now + DAY_MS)
@@ -182,7 +214,7 @@ async function enrichSecondary(env: Env, list: MatchDetails[], now: number, extr
     const events: MatchEvent[] = (af.events ?? []).map((e) => ({ ...e, teamId: teamMap.get(e.teamId) ?? e.teamId }));
     const finished = af.status === 'finished' || fd.status === 'finished';
     const lineups = af.lineups?.map((l) => ({ ...l, teamId: teamMap.get(l.teamId) ?? l.teamId }));
-    const x = extraStmt(env, fd.id, { ...af, lineups }, now);
+    const x = extraStmt(env, fd.id, { ...af, lineups }, now, fullIds.has(af.id));
     if (x) extras.push(x);
     merged.push({
       ...fd,
@@ -221,6 +253,7 @@ export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
   const notices: Notice[] = [];
   const extras: D1PreparedStatement[] = [];
   const byId = new Map<number, MatchDetails>();
+  const fullIds = new Set<number>((body.full ?? []).map((f) => Number(f?.fixture?.id)));
   for (const f of [...(body.live ?? []), ...(body.finals ?? []), ...(body.full ?? [])]) {
     const m = normFixture(f);
     byId.set(m.id, m);
@@ -239,15 +272,17 @@ export async function relayIngest(env: Env, body: RelayBody, now = Date.now()) {
     await recordTeams(env, live, now);
     const sec = new Set(secondaryLeagues(env));
     const primary = live.filter((m) => !sec.has(m.league.id));
-    for (const m of primary) {
-      const x = extraStmt(env, m.id, m, now);
+    // بمعرّف API-Football دائماً (تعتمد عليه الخطة لمعرفة وقت آخر جلب)، وبمعرّف football-data.org أيضاً للمباريات المقابلة
+    for (const m of live) {
+      const x = extraStmt(env, m.id, m, now, fullIds.has(m.id));
       if (x) extras.push(x);
     }
     notices.push(...(await applyUpdates(env, primary.map(slim), now)));
-    notices.push(...(await enrichSecondary(env, live.filter((m) => sec.has(m.league.id)), now, extras)));
+    notices.push(...(await enrichSecondary(env, live.filter((m) => sec.has(m.league.id)), now, extras, fullIds)));
     for (let i = 0; i < extras.length; i += 50) await env.DB.batch(extras.slice(i, i + 50));
   }
   if (body.live || body.full) await setMeta(env, 'relay_live_at', String(now));
+  if (body.live) await setMeta(env, 'relay_scan_at', String(now));
   await setMeta(env, 'relay_last', JSON.stringify({ at: new Date(now).toISOString(), live: body.live?.length ?? null, full: body.full?.length ?? 0, extras: extras.length, finals: body.finals?.length ?? 0, days: Object.keys(days) }));
   const stats = notices.length ? await dispatch(env, notices) : null;
   return { ok: true, notices: notices.length, stats };

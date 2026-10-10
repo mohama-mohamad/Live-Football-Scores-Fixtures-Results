@@ -1,18 +1,20 @@
 # وسيط API-Football: خوادم Cloudflare مرفوضة لدى API-Football، فتجلب هذه المهمة البيانات من GitHub
 # وترسلها إلى الخادم موقّعة (HMAC بمفتاح API-Football نفسه — لا حاجة لسر جديد).
-# الخادم يقرّر ماذا يحتاج (GET /api/__relay/plan) ويحترم الحد اليومي، فلا تُهدر الطلبات.
+# المهمة حلقة مستمرة (scripts/af-relay.sh): الخادم يحدد متى يُسأل API-Football حسب المباريات الجارية
+# والفرق المفضلة والرصيد اليومي، وقبل حد الست ساعات تشغّل المهمة نسختها التالية.
+# الجدولة أدناه احتياطية فقط (جدولة GitHub غير منتظمة)، لإعادة التشغيل إن توقفت السلسلة.
 name: API-Football relay
 
 on:
   schedule:
-    # كل 15 دقيقة في ساعات المباريات (UTC)، وكل ساعة في الباقي
-    - cron: '*/15 11-22 * * *'
-    - cron: '0 0-10,23 * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: write
 
+# نسخة واحدة تعمل في أي وقت؛ التشغيل الجديد ينتظر انتهاء الحالي
 concurrency:
   group: af-relay
   cancel-in-progress: false
@@ -20,71 +22,16 @@ concurrency:
 jobs:
   relay:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-      APP_URL: ${{ vars.APP_URL || 'https://koora-live.mmido80.workers.dev' }}
+    timeout-minutes: 355
     steps:
-      - name: Fetch and push
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - name: Relay loop
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          APP_URL: ${{ vars.APP_URL || 'https://koora-live.mmido80.workers.dev' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           [ -n "$API_FOOTBALL_KEY" ] || { echo "لا يوجد API_FOOTBALL_KEY"; exit 0; }
-          plan=$(curl -sf --retry 3 "$APP_URL/api/__relay/plan") || { echo "::warning::تعذّر جلب الخطة"; exit 0; }
-          echo "plan: $plan"
-          leagues=$(echo "$plan" | jq -c '.leagues')
-          api() {
-            curl -s --retry 2 -H "x-apisports-key: $API_FOOTBALL_KEY" "https://v3.football.api-sports.io$1"
-          }
-          # الرد صالح إن خلا من الأخطاء
-          ok() { jq -e '((.errors // []) | length) == 0 and (.response | type == "array")' >/dev/null 2>&1; }
-
-          echo '{}' > payload.json
-          add() { jq -c "$1" --slurpfile v "$2" ${3:+--arg k "$3"} payload.json > p.tmp && mv p.tmp payload.json; }
-
-          days=$(echo "$plan" | jq -r '.days | join(" ")')
-          if [ "$(echo "$plan" | jq -r '.live')" = true ]; then
-            ids=$(echo "$leagues" | jq -r 'join("-")')
-            api "/fixtures?live=$ids" > live.json
-            if ok < live.json; then
-              jq -c '.response' live.json > v.json && add '.live = $v[0]' v.json
-              echo "مباشر: $(jq length v.json)"
-              # مباريات كانت جارية واختفت من المباشر: قائمة يومها تعطي النتيجة النهائية
-              extra=$(echo "$plan" | jq -r --slurpfile v v.json '($v[0] | map(.fixture.id | tostring)) as $live | .openDays | to_entries | map(select(.key as $k | $live | index($k) | not) | .value) | unique | join(" ")')
-              [ -n "$extra" ] && days=$(echo $days $extra | tr ' ' '\n' | sort -u | tr '\n' ' ')
-            else
-              echo "::warning::المباشر: $(jq -c '.errors' live.json 2>/dev/null)"
-            fi
-          fi
-
-          # التفاصيل الكاملة (أحداث + إحصائيات + تشكيلة): مباراة واحدة لكل طلب في الخطة المجانية
-          echo '[]' > full.json
-          for id in $(echo "$plan" | jq -r '.full[]'); do
-            api "/fixtures?id=$id" > f.json
-            if ok < f.json; then
-              # بيانات اللاعبين الفردية غير مستخدمة وكبيرة الحجم
-              jq -c '[.response[] | {fixture, league, teams, goals, score, events, lineups, statistics}]' f.json > v.json
-              jq -c -s 'add' full.json v.json > p.tmp && mv p.tmp full.json
-            else
-              echo "::warning::التفاصيل $id: $(jq -c '.errors' f.json 2>/dev/null)"
-            fi
-          done
-          if [ "$(jq length full.json)" != 0 ]; then add '.full = $v[0]' full.json; echo "تفاصيل: $(jq length full.json)"; fi
-
-          for d in $days; do
-            api "/fixtures?date=$d&timezone=UTC" > day.json
-            if ok < day.json; then
-              jq -c --argjson L "$leagues" '[.response[] | select(.league.id as $l | $L | index($l))]' day.json > v.json
-              add '.days[$k] = $v[0]' v.json "$d"
-              echo "$d: $(jq length v.json)"
-            else
-              echo "::warning::$d: $(jq -c '.errors' day.json 2>/dev/null)"
-            fi
-          done
-
-          if [ "$(jq 'length' payload.json)" = 0 ]; then echo "لا شيء لإرساله"; exit 0; fi
-          jq -c --argjson ts "$(date +%s%3N)" '. + {ts: $ts}' payload.json > body.json
-          sig=$(openssl dgst -sha256 -hmac "$API_FOOTBALL_KEY" -hex < body.json | awk '{print $NF}')
-          echo "حجم: $(wc -c < body.json) بايت"
-          code=$(curl -s -o res.json -w '%{http_code}' --retry 2 -X POST "$APP_URL/api/__relay/ingest" \
-            -H 'content-type: application/json' -H "x-relay-signature: $sig" --data-binary @body.json)
-          echo "ingest -> $code $(cat res.json)"
-          [ "$code" = 200 ] || exit 1
+          scripts/af-relay.sh
