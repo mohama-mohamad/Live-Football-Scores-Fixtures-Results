@@ -30,5 +30,10 @@ jobs:
             report "fixture-detail" "$r"
             echo "$r" | jq -r '"  events=\(.response[0].events|length) lineups=\(.response[0].lineups|length) stats=\(.response[0].statistics|length)"'
           fi
-          report "standings 307/2026" "$(api '/standings?league=307&season=2026')"
-          report "standings 307/2025" "$(api '/standings?league=307&season=2025')"
+          today=$(date -u +%F)
+          echo "size date=$today: $(api "/fixtures?date=$today" | wc -c) bytes"
+          echo "size live=all: $(api '/fixtures?live=all' | wc -c) bytes"
+          r=$(api "/fixtures?date=$today&league=39"); report "date+league(no season)" "$r"; echo "  size: $(echo "$r" | wc -c)"
+          r=$(api "/fixtures?date=$today&league=39&season=2026"); report "date+league+season2026" "$r"
+          r=$(api "/fixtures?date=$today&league=39&season=2025"); report "date+league+season2025" "$r"
+          r=$(api "/fixtures?live=39-140-135-78-61-307-2-233"); report "live filtered" "$r"; echo "  size: $(echo "$r" | wc -c)"
