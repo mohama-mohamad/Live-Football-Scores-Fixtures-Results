@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { BellIcon, CalendarIcon, LiveIcon, RefreshIcon, ResultsIcon, StarIcon, TrophyIcon, BackIcon } from './components/Icons';
-import { useStore } from './lib/store';
+import { dismissFavReset, syncProvider, useStore } from './lib/store';
+import { useMeta } from './api/client';
 import { LivePage } from './pages/LivePage';
 import { DayMatchesPage } from './pages/DayMatchesPage';
 import { LeaguesPage } from './pages/LeaguesPage';
@@ -46,6 +47,11 @@ export function App() {
   const qc = useQueryClient();
   const fetching = useIsFetching();
   const notifOn = useStore((s) => s.settings.notificationsEnabled);
+  const favReset = useStore((s) => s.favReset);
+  const meta = useMeta();
+  useEffect(() => {
+    if (meta.data?.provider) syncProvider(meta.data.provider);
+  }, [meta.data?.provider]);
   const title = TITLES.find(([re]) => re.test(loc.pathname))?.[1] ?? 'كورة لايف';
   const isDetail = /^\/(match|league)\//.test(loc.pathname) || loc.pathname === '/settings';
 
@@ -80,6 +86,17 @@ export function App() {
       </header>
 
       <main className="content">
+        {favReset && (
+          <div className="banner warn">
+            <span>
+              تغيّر مصدر البيانات إلى البيانات الحقيقية، فمُسحت فرقك المفضلة القديمة. أضفها من جديد لتصلك تنبيهاتها: افتح أي مباراة لفريقك
+              واضغط ★.
+            </span>
+            <Link to="/favorites" onClick={dismissFavReset}>
+              حسناً
+            </Link>
+          </div>
+        )}
         <Routes>
           <Route path="/" element={<LivePage />} />
           <Route path="/fixtures" element={<DayMatchesPage mode="fixtures" />} />

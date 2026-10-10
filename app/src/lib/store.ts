@@ -11,6 +11,10 @@ export interface Settings {
 }
 
 export interface State {
+  // مصدر البيانات الذي حُفظت به المفضلة (معرّفات الفرق تختلف بين المصادر)
+  provider?: string;
+  // تنبيه لمرة واحدة بعد مسح فرق مصدر قديم
+  favReset?: boolean;
   favTeams: Team[];
   favLeagues: number[];
   settings: Settings;
@@ -34,6 +38,8 @@ function load(): State {
     if (!raw) return DEFAULT;
     const s = JSON.parse(raw) as Partial<State>;
     return {
+      provider: s.provider,
+      favReset: s.favReset,
       favTeams: s.favTeams ?? DEFAULT.favTeams,
       favLeagues: s.favLeagues ?? DEFAULT.favLeagues,
       settings: { ...DEFAULT.settings, ...s.settings, events: { ...DEFAULT.settings.events, ...s.settings?.events } },
@@ -78,6 +84,27 @@ export function toggleTeam(team: Team) {
 
 export function toggleLeague(id: number) {
   setState((s) => ({ ...s, favLeagues: s.favLeagues.includes(id) ? s.favLeagues.filter((x) => x !== id) : [...s.favLeagues, id] }));
+}
+
+// معرّفات فرق البيانات التجريبية: رقم الدوري × 1000 + ترتيب الفريق
+const MOCK_LEAGUES = [307, 39, 140, 2, 233, 135, 78, 61];
+const looksMock = (id: number) => MOCK_LEAGUES.includes(Math.floor(id / 1000)) && id % 1000 < 12;
+
+// عند تغيّر مصدر البيانات نمسح الفرق المفضلة القديمة (البطولات تبقى لأن معرّفاتها واحدة)
+export function syncProvider(provider: string) {
+  const s = state;
+  if (s.provider === provider) return;
+  const changed = s.provider !== undefined || (provider !== 'mock' && s.favTeams.some((t) => looksMock(t.id)));
+  setState((cur) => ({
+    ...cur,
+    provider,
+    favTeams: changed ? [] : cur.favTeams,
+    favReset: changed && cur.favTeams.length > 0 ? true : cur.favReset,
+  }));
+}
+
+export function dismissFavReset() {
+  setState((s) => ({ ...s, favReset: false }));
 }
 
 export function updateSettings(patch: Partial<Settings>) {
