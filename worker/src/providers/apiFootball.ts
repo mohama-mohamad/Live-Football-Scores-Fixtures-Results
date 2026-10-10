@@ -205,11 +205,26 @@ export class ApiFootballProvider implements Provider {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
     const res = await this.fetcher(url.toString(), { headers: { 'x-apisports-key': this.key } });
     if (!res.ok) throw new ProviderError(`API-Football HTTP ${res.status}`);
-    return res.text();
+    const text = await res.text();
+    // عند رفض الطلب نضيف ترويسات الحدود للرسالة (للتشخيص)
+    if (text.length < 2000 && text.includes('"errors"') && !text.includes('"errors":[]')) {
+      const h = (k: string) => res.headers.get(k) ?? '-';
+      this.lastLimits = `limit/min=${h('x-ratelimit-limit')} left/min=${h('x-ratelimit-remaining')} left/day=${h('x-ratelimit-requests-remaining')} cf-ray=${h('cf-ray')}`;
+    }
+    return text;
   }
 
+  // آخر ترويسات حدود عند الرفض (تُضاف لرسالة الخطأ)
+  lastLimits = '';
+
   private async get(path: string, params: Record<string, string | number>): Promise<Json[]> {
-    return parseEnvelope(await this.fetchText(path, params));
+    const text = await this.fetchText(path, params);
+    try {
+      return parseEnvelope(text);
+    } catch (e) {
+      if (e instanceof ProviderError && this.lastLimits) throw new ProviderError(`${e.message} [${this.lastLimits}]`, e.status);
+      throw e;
+    }
   }
 
   async matchesByUtcDate(date: string): Promise<Match[]> {
