@@ -106,3 +106,17 @@ describe('ambiguous names', () => {
     expect(wants({ teams: [], teamKeys: [teamKey('Zamalek SC')], leagues: [], events }, n)).toBe(true);
   });
 });
+
+describe('football-data live filter', () => {
+  it('only uses status values the API accepts', async () => {
+    let url = '';
+    const fake = (async (u: string) => {
+      url = u;
+      return new Response(JSON.stringify({ matches: [] }));
+    }) as unknown as typeof fetch;
+    await new FootballDataClient('k', async () => {}, fake).live();
+    const allowed = new Set(['TIMED', 'SCHEDULED', 'LIVE', 'IN_PLAY', 'PAUSED', 'FINISHED', 'POSTPONED', 'SUSPENDED', 'CANCELLED']);
+    const statuses = new URL(url).searchParams.get('status')!.split(',');
+    expect(statuses.every((s) => allowed.has(s))).toBe(true);
+  });
+});

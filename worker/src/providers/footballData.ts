@@ -107,7 +107,7 @@ export class FootballDataClient {
 
   // المباريات الجارية الآن في البطولات المدعومة
   async live(): Promise<Match[]> {
-    const body = await this.get('/matches?status=IN_PLAY,PAUSED,EXTRA_TIME,PENALTY_SHOOTOUT,LIVE');
+    const body = await this.get('/matches?status=IN_PLAY,PAUSED,LIVE');
     return (body.matches ?? []).map(normFdMatch).filter(isMatch);
   }
 
