@@ -1,0 +1,1257 @@
+/* ===== الألوان والمتغيرات ===== */
+:root {
+  --bg: #f2f4f3;
+  --surface: #ffffff;
+  --surface-2: #f6f8f7;
+  --text: #121a16;
+  --muted: #66746c;
+  --line: #e3e8e5;
+  --primary: #0b6b3a;
+  --primary-2: #14924f;
+  --primary-soft: #e3f3ea;
+  --live: #e5262c;
+  --live-soft: #fde8e8;
+  --gold: #e8a900;
+  --warn-bg: #fff6dc;
+  --warn-text: #7a5a00;
+  --info-bg: #e5f0ff;
+  --info-text: #134a8e;
+  --topbar: #0b6b3a;
+  --topbar-text: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 1px 8px rgb(0 0 0 / 0.04);
+  --radius: 14px;
+  --tabbar-h: 58px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0b1510;
+    --surface: #131f19;
+    --surface-2: #18271f;
+    --text: #e8efeb;
+    --muted: #8fa198;
+    --line: #22332a;
+    --primary: #22b566;
+    --primary-2: #2fd179;
+    --primary-soft: #143322;
+    --live: #ff4d52;
+    --live-soft: #3a1618;
+    --warn-bg: #352a0b;
+    --warn-text: #f3d27a;
+    --info-bg: #102540;
+    --info-text: #9cc6ff;
+    --topbar: #0f1d16;
+    --topbar-text: #e8efeb;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #0b1510;
+  --surface: #131f19;
+  --surface-2: #18271f;
+  --text: #e8efeb;
+  --muted: #8fa198;
+  --line: #22332a;
+  --primary: #22b566;
+  --primary-2: #2fd179;
+  --primary-soft: #143322;
+  --live: #ff4d52;
+  --live-soft: #3a1618;
+  --warn-bg: #352a0b;
+  --warn-text: #f3d27a;
+  --info-bg: #102540;
+  --info-text: #9cc6ff;
+  --topbar: #0f1d16;
+  --topbar-text: #e8efeb;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+/* ===== أساسيات ===== */
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Cairo', -apple-system, 'SF Arabic', 'Geeza Pro', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  overscroll-behavior-y: none;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ===== الهيكل ===== */
+.app {
+  min-height: 100dvh;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--topbar);
+  color: var(--topbar-text);
+  padding-top: env(safe-area-inset-top);
+}
+
+.topbar-inner {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.topbar h1 {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand {
+  font-size: 22px;
+  width: 36px;
+  text-align: center;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.topbar .icon-btn {
+  color: var(--topbar-text);
+}
+
+.icon-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.icon-btn:active {
+  background: rgb(127 127 127 / 0.15);
+}
+
+.icon-btn.small {
+  width: 32px;
+  height: 32px;
+}
+
+.icon-btn.star.on {
+  color: var(--gold);
+}
+
+.icon-btn.spin svg {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+.badge-dot {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffb020;
+  box-shadow: 0 0 0 2px var(--topbar);
+}
+
+.content {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px max(12px, env(safe-area-inset-right)) calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 20px)
+    max(12px, env(safe-area-inset-left));
+}
+
+.tabbar {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-around;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tab {
+  flex: 1;
+  height: var(--tabbar-h);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tab.on {
+  color: var(--primary);
+}
+
+/* ===== بطاقات المباريات ===== */
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 6px 4px 10px;
+}
+
+h2.section-title {
+  margin-top: 18px;
+}
+
+.league-section {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.league-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 4px 4px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.league-head.plain {
+  padding: 10px 14px;
+}
+
+.league-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  min-width: 0;
+  padding: 6px 0;
+}
+
+.league-name {
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.league-country {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.more {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.match-card {
+  display: grid;
+  grid-template-columns: 1fr 86px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+  min-height: 64px;
+}
+
+.cards > :last-child,
+.cards > div:last-child .match-card {
+  border-bottom: 0;
+}
+
+.match-card:active {
+  background: var(--surface-2);
+}
+
+.match-card.is-live {
+  background: linear-gradient(to left, var(--live-soft), transparent 6px);
+}
+
+.team {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.team-away {
+  flex-direction: row-reverse;
+  text-align: left;
+}
+
+.team.lose {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.team-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fav-dot {
+  color: var(--gold);
+  font-size: 11px;
+}
+
+.red-card {
+  display: inline-block;
+  min-width: 9px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--live);
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+}
+
+.center {
+  text-align: center;
+}
+
+.score {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.score .sep {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.kickoff {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.status.live {
+  color: var(--live);
+}
+
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  display: inline-block;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ===== الشعارات ===== */
+.logo {
+  border-radius: 50%;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.logo-fallback.league {
+  background: var(--primary-soft);
+}
+
+.logo-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ===== شريط الأيام والفلاتر ===== */
+.date-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 -12px 10px;
+  padding: 2px 12px;
+  scroll-snap-type: x proximity;
+}
+
+.date-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.date-chip {
+  flex: 0 0 auto;
+  min-width: 70px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  scroll-snap-align: center;
+}
+
+.date-chip .top {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.date-chip .bottom {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.date-chip.on {
+  background: var(--primary);
+  color: #fff;
+}
+
+.date-chip.on .bottom {
+  color: rgb(255 255 255 / 0.85);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 4px 10px;
+}
+
+.day-title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.chips,
+.chip-grid {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chip.big {
+  padding: 7px 14px;
+}
+
+.chip.on {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 12px;
+  padding-inline: 8px 6px;
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.chip-x {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ===== الحالات ===== */
+.skeleton-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.skeleton {
+  height: 64px;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.empty {
+  text-align: center;
+  padding: 36px 16px;
+  color: var(--muted);
+}
+
+.empty-icon {
+  font-size: 40px;
+  margin-bottom: 6px;
+}
+
+.empty h3 {
+  color: var(--text);
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.empty-body {
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.banner span {
+  flex: 1;
+}
+
+.banner.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.banner.info {
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.banner.info a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.banner-close {
+  opacity: 0.7;
+  padding: 2px 6px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 4px 12px;
+}
+
+/* ===== الأزرار ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  min-height: 44px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-weight: 700;
+}
+
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.wide {
+  width: 100%;
+}
+
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.cta .list-sub {
+  color: rgb(255 255 255 / 0.85);
+}
+
+/* ===== القوائم ===== */
+.list-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  padding-inline-end: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.list-row:last-child {
+  border-bottom: 0;
+}
+
+.list-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  min-width: 0;
+}
+
+.list-title {
+  font-weight: 700;
+}
+
+.list-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.info-row:last-child {
+  border-bottom: 0;
+}
+
+.info-row > :last-child {
+  text-align: left;
+  font-weight: 600;
+}
+
+/* ===== صفحة البطولة ===== */
+.league-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 12px;
+}
+
+.league-hero h2 {
+  font-size: 18px;
+}
+
+.segmented {
+  display: flex;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 3px;
+  margin-bottom: 12px;
+  gap: 2px;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 7px 4px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.segmented button.on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.12);
+}
+
+.table-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.group-name {
+  font-size: 14px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+
+.standings {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.standings th {
+  color: var(--muted);
+  font-weight: 600;
+  padding: 8px 4px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.standings td {
+  text-align: center;
+  padding: 7px 3px;
+  border-bottom: 1px solid var(--line);
+}
+
+.standings tr:last-child td {
+  border-bottom: 0;
+}
+
+.standings .team-col {
+  text-align: right;
+  width: 46%;
+}
+
+.standings .rank {
+  color: var(--muted);
+  width: 26px;
+}
+
+.standings .pts {
+  font-weight: 700;
+}
+
+.standings tr.fav td {
+  background: var(--primary-soft);
+}
+
+.team-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  text-align: right;
+  max-width: 100%;
+}
+
+.team-cell span:not(.fav-dot) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-sep {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.cards:has(.day-sep) {
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+/* ===== صفحة المباراة ===== */
+.hero {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 10px 10px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.hero.is-live {
+  box-shadow: inset 0 3px 0 var(--live), var(--shadow);
+}
+
+.hero-league {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.hero-row {
+  display: grid;
+  grid-template-columns: 1fr 110px 1fr;
+  align-items: start;
+}
+
+.hero-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hero-name {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.hero-center {
+  padding-top: 8px;
+}
+
+.hero-score {
+  font-size: 34px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.hero-time {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.scorers {
+  list-style: none;
+  padding: 0;
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timeline {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px 0;
+}
+
+.tl-row {
+  display: grid;
+  grid-template-columns: 1fr 50px 1fr;
+  align-items: center;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.tl-min {
+  text-align: center;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-row.away .tl-event {
+  flex-direction: row-reverse;
+  text-align: left;
+}
+
+.tl-icon {
+  font-size: 16px;
+}
+
+.tl-main {
+  font-weight: 600;
+}
+
+.tl-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ev-goal .tl-main,
+.ev-penalty_goal .tl-main,
+.ev-own_goal .tl-main {
+  font-weight: 700;
+}
+
+.tl-sep {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 6px;
+  margin: 4px 12px;
+  border-block: 1px dashed var(--line);
+}
+
+.stats {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+}
+
+.stats-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.stat {
+  margin: 12px 0;
+}
+
+.stat-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-top .lead {
+  font-weight: 700;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stat-bars {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+  display: flex;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* الأعمدة تنطلق من المنتصف نحو الأطراف */
+.bar.home {
+  justify-content: flex-end;
+}
+
+.bar.home i {
+  background: var(--primary);
+}
+
+.bar.away i {
+  background: #8a99a0;
+}
+
+.lineup {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.lineup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.formation {
+  margin-inline-start: auto;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.coach {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.players {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.players li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.players li:last-child {
+  border-bottom: 0;
+}
+
+.shirt {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.pname {
+  flex: 1;
+}
+
+.pos {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.subs-title {
+  font-weight: 700;
+  font-size: 13px;
+  margin: 10px 0 2px;
+  color: var(--muted);
+}
+
+/* ===== الإعدادات ===== */
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.panel h2 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.panel p {
+  margin: 0 0 12px;
+}
+
+.panel.about {
+  padding-inline: 0;
+  padding-bottom: 4px;
+}
+
+.panel.about h2 {
+  padding-inline: 14px;
+}
+
+.status-line {
+  font-weight: 600;
+  font-size: 14px;
+  margin-top: 10px !important;
+}
+
+.status-line.ok {
+  color: var(--primary);
+}
+
+.status-line.err {
+  color: var(--live);
+}
+
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+
+/* مفتاح تبديل بأسلوب iOS */
+.toggle-row input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 51px;
+  height: 31px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.toggle-row input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.25);
+  transition: transform 0.2s;
+}
+
+.toggle-row input:checked {
+  background: #34c759;
+}
+
+.toggle-row input:checked::after {
+  transform: translateX(-20px);
+}
+
+.steps ol {
+  padding-inline-start: 22px;
+  margin: 0;
+}
+
+.steps li {
+  margin-bottom: 8px;
+}
+
+.inline-icon {
+  vertical-align: -3px;
+  color: #0a84ff;
+}

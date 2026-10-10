@@ -1,0 +1,244 @@
+// مزوّد API-Football (api-sports.io) — https://www.api-football.com/documentation-v3
+import type { EventType, Lineup, Match, MatchDetails, MatchEvent, MatchStatus, StatPair, Standings } from '../../../shared/types';
+import { LEAGUE_IDS, LEAGUES } from '../../../shared/leagues';
+import { ProviderError, type Provider } from './types';
+
+const BASE = 'https://v3.football.api-sports.io';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Json = any;
+
+const STATUS: Record<string, MatchStatus> = {
+  TBD: 'scheduled',
+  NS: 'scheduled',
+  '1H': 'live',
+  '2H': 'live',
+  ET: 'live',
+  LIVE: 'live',
+  HT: 'halftime',
+  BT: 'halftime',
+  P: 'penalties',
+  FT: 'finished',
+  AET: 'finished',
+  PEN: 'finished',
+  PST: 'postponed',
+  CANC: 'cancelled',
+  ABD: 'cancelled',
+  AWD: 'finished',
+  WO: 'finished',
+  SUSP: 'cancelled',
+  INT: 'cancelled',
+};
+
+const STAT_KEYS: Record<string, string> = {
+  'Ball Possession': 'possession',
+  'Total Shots': 'shots_total',
+  'Shots on Goal': 'shots_on',
+  'Shots off Goal': 'shots_off',
+  'Blocked Shots': 'shots_blocked',
+  'Corner Kicks': 'corners',
+  Offsides: 'offsides',
+  Fouls: 'fouls',
+  'Yellow Cards': 'yellow',
+  'Red Cards': 'red',
+  'Goalkeeper Saves': 'saves',
+  'Total passes': 'passes',
+  'Passes %': 'pass_accuracy',
+  expected_goals: 'xg',
+};
+
+function eventType(e: Json): EventType | null {
+  const type = String(e.type ?? '').toLowerCase();
+  const detail = String(e.detail ?? '').toLowerCase();
+  if (type === 'goal') {
+    if (detail.includes('own')) return 'own_goal';
+    if (detail.includes('missed')) return 'missed_penalty';
+    if (detail.includes('penalty')) return 'penalty_goal';
+    return 'goal';
+  }
+  if (type === 'card') return detail.includes('red') || detail.includes('second yellow') ? 'red' : 'yellow';
+  if (type === 'subst') return 'sub';
+  if (type === 'var') return 'var';
+  return null;
+}
+
+function normEvents(list: Json[] | undefined): MatchEvent[] | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const out: MatchEvent[] = [];
+  for (const e of list) {
+    const t = eventType(e);
+    if (!t) continue;
+    out.push({
+      minute: Number(e.time?.elapsed ?? 0),
+      extra: e.time?.extra ?? undefined,
+      type: t,
+      teamId: Number(e.team?.id ?? 0),
+      // في التبديلات: player = الخارج، assist = الداخل
+      player: e.player?.name ?? undefined,
+      assist: e.assist?.name ?? undefined,
+      detail: e.detail ?? undefined,
+    });
+  }
+  return out;
+}
+
+export function normFixture(f: Json): MatchDetails {
+  const short = String(f.fixture?.status?.short ?? '');
+  const status = STATUS[short] ?? 'unknown';
+  const m: MatchDetails = {
+    id: Number(f.fixture.id),
+    league: {
+      id: Number(f.league?.id),
+      name: String(f.league?.name ?? ''),
+      country: f.league?.country ?? undefined,
+      logo: f.league?.logo ?? undefined,
+      season: f.league?.season ?? undefined,
+    },
+    round: f.league?.round ?? undefined,
+    kickoff: new Date(Number(f.fixture.timestamp) * 1000).toISOString(),
+    status,
+    statusShort: short,
+    minute: f.fixture?.status?.elapsed ?? null,
+    home: { id: Number(f.teams?.home?.id), name: String(f.teams?.home?.name ?? ''), logo: f.teams?.home?.logo },
+    away: { id: Number(f.teams?.away?.id), name: String(f.teams?.away?.name ?? ''), logo: f.teams?.away?.logo },
+    score: { home: f.goals?.home ?? null, away: f.goals?.away ?? null },
+    venue: [f.fixture?.venue?.name, f.fixture?.venue?.city].filter(Boolean).join('، ') || undefined,
+    referee: f.fixture?.referee ?? undefined,
+    events: normEvents(f.events),
+  };
+  const pen = f.score?.penalty;
+  if (pen && (pen.home != null || pen.away != null)) m.penalties = { home: pen.home, away: pen.away };
+
+  if (Array.isArray(f.statistics) && f.statistics.length === 2) {
+    const [h, a] = f.statistics;
+    const byType = (side: Json) => new Map<string, Json>((side.statistics ?? []).map((s: Json) => [s.type, s.value]));
+    const hm = byType(h);
+    const am = byType(a);
+    const stats: StatPair[] = [];
+    for (const [type, key] of Object.entries(STAT_KEYS)) {
+      if (hm.has(type) || am.has(type)) stats.push({ key, home: hm.get(type) ?? null, away: am.get(type) ?? null });
+    }
+    m.stats = stats;
+  }
+
+  if (Array.isArray(f.lineups) && f.lineups.length) {
+    m.lineups = f.lineups.map(
+      (l: Json): Lineup => ({
+        teamId: Number(l.team?.id),
+        formation: l.formation ?? undefined,
+        coach: l.coach?.name ?? undefined,
+        startXI: (l.startXI ?? []).map((p: Json) => ({ name: p.player?.name, number: p.player?.number, pos: p.player?.pos })),
+        subs: (l.substitutes ?? []).map((p: Json) => ({ name: p.player?.name, number: p.player?.number, pos: p.player?.pos })),
+      }),
+    );
+  }
+  return m;
+}
+
+// القوائم لا تحتاج الإحصائيات والتشكيلات (لتقليل حجم التخزين)
+function slim(m: MatchDetails): Match {
+  const { stats: _s, lineups: _l, ...rest } = m;
+  return rest;
+}
+
+export class ApiFootballProvider implements Provider {
+  name = 'api-football';
+  limited = true;
+
+  constructor(
+    private key: string,
+    private hooks: {
+      // يُستدعى قبل كل طلب فعلي (لاحتساب الحد اليومي)
+      onRequest?: () => Promise<void>;
+      // ذاكرة مؤقتة للقيم التي نادراً ما تتغير (مثل الموسم الحالي)
+      memo?: <T>(key: string, ttlSec: number, fn: () => Promise<T>) => Promise<T>;
+    } = {},
+    private fetcher: typeof fetch = fetch,
+  ) {}
+
+  private async get(path: string, params: Record<string, string | number>): Promise<Json[]> {
+    await this.hooks.onRequest?.();
+    const url = new URL(BASE + path);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
+    const res = await this.fetcher(url.toString(), { headers: { 'x-apisports-key': this.key } });
+    if (!res.ok) throw new ProviderError(`API-Football HTTP ${res.status}`);
+    const body: Json = await res.json();
+    const errors = body.errors;
+    const hasErrors = Array.isArray(errors) ? errors.length > 0 : errors && Object.keys(errors).length > 0;
+    if (hasErrors) throw new ProviderError(`API-Football: ${Object.values(errors).join(' | ')}`);
+    return Array.isArray(body.response) ? body.response : [];
+  }
+
+  async matchesByUtcDate(date: string): Promise<Match[]> {
+    const list = await this.get('/fixtures', { date, timezone: 'UTC' });
+    return list.filter((f) => LEAGUE_IDS.has(Number(f.league?.id))).map((f) => slim(normFixture(f)));
+  }
+
+  async live(): Promise<Match[]> {
+    const ids = LEAGUES.map((l) => l.id).join('-');
+    const list = await this.get('/fixtures', { live: ids });
+    return list.map((f) => slim(normFixture(f)));
+  }
+
+  async matchesByIds(ids: number[]): Promise<Match[]> {
+    const out: Match[] = [];
+    for (let i = 0; i < ids.length; i += 20) {
+      const list = await this.get('/fixtures', { ids: ids.slice(i, i + 20).join('-') });
+      out.push(...list.map((f) => slim(normFixture(f))));
+    }
+    return out;
+  }
+
+  async match(id: number): Promise<MatchDetails | null> {
+    const list = await this.get('/fixtures', { id });
+    return list[0] ? normFixture(list[0]) : null;
+  }
+
+  private currentSeason(leagueId: number): Promise<number> {
+    const load = () => this.loadSeason(leagueId);
+    return this.hooks.memo ? this.hooks.memo(`season:${leagueId}`, 86400, load) : load();
+  }
+
+  private async loadSeason(leagueId: number): Promise<number> {
+    const list = await this.get('/leagues', { id: leagueId, current: 'true' });
+    const season = list[0]?.seasons?.find((s: Json) => s.current)?.year ?? list[0]?.seasons?.[0]?.year;
+    if (!season) throw new ProviderError('لم يتم العثور على الموسم الحالي', 404);
+    return Number(season);
+  }
+
+  async standings(leagueId: number): Promise<Standings | null> {
+    const season = await this.currentSeason(leagueId);
+    const list = await this.get('/standings', { league: leagueId, season });
+    const lg = list[0]?.league;
+    if (!lg) return null;
+    return {
+      league: { id: lg.id, name: lg.name, country: lg.country, logo: lg.logo, season: lg.season },
+      groups: (lg.standings ?? []).map((rows: Json[], i: number) => ({
+        name: rows[0]?.group ?? `المجموعة ${i + 1}`,
+        rows: rows.map((r: Json) => ({
+          rank: r.rank,
+          team: { id: r.team?.id, name: r.team?.name, logo: r.team?.logo },
+          played: r.all?.played ?? 0,
+          win: r.all?.win ?? 0,
+          draw: r.all?.draw ?? 0,
+          lose: r.all?.lose ?? 0,
+          goalsFor: r.all?.goals?.for ?? 0,
+          goalsAgainst: r.all?.goals?.against ?? 0,
+          goalDiff: r.goalsDiff ?? 0,
+          points: r.points ?? 0,
+          form: r.form ?? undefined,
+          group: r.group ?? undefined,
+        })),
+      })),
+    };
+  }
+
+  async leagueMatches(leagueId: number): Promise<{ last: Match[]; next: Match[] }> {
+    const season = await this.currentSeason(leagueId);
+    const [last, next] = await Promise.all([
+      this.get('/fixtures', { league: leagueId, season, last: 10 }),
+      this.get('/fixtures', { league: leagueId, season, next: 10 }),
+    ]);
+    return { last: last.map((f) => slim(normFixture(f))), next: next.map((f) => slim(normFixture(f))) };
+  }
+}

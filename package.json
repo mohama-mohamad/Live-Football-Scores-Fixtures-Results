@@ -1,0 +1,22 @@
+{
+  "name": "live-football-scores",
+  "private": true,
+  "version": "1.0.0",
+  "description": "تطبيق PWA عربي لنتائج ومباريات كرة القدم المباشرة مع تنبيهات",
+  "workspaces": [
+    "app",
+    "worker"
+  ],
+  "scripts": {
+    "dev": "npm run build && (npm run dev --workspace worker & npm run dev --workspace app)",
+    "build": "npm run build --workspace app",
+    "test": "npm test --workspace worker",
+    "typecheck": "npm run typecheck --workspace app && npm run typecheck --workspace worker",
+    "deploy": "npm run build && npm run deploy --workspace worker",
+    "icons": "node scripts/make-icons.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

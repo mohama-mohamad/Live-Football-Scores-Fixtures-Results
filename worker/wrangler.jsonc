@@ -1,0 +1,35 @@
+{
+  // إعدادات Cloudflare Worker: يخدم التطبيق (الملفات الثابتة) + واجهة /api + مهمة التنبيهات الدورية
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "koora-live",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "../app/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // كل دقيقة: يفحص المباريات الجارية ويرسل التنبيهات (مع احترام حدّ الطلبات اليومي)
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "football",
+      // ضع هنا المعرّف الناتج عن: npx wrangler d1 create football
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    // mock = بيانات تجريبية بلا مفتاح | api-football = بيانات حقيقية (يتطلب السر API_FOOTBALL_KEY)
+    "PROVIDER": "mock",
+    // حدّ الطلبات اليومي لخطة API-Football (المجانية = 100)
+    "DAILY_REQUEST_LIMIT": "100",
+    // أقل فاصل بالثواني بين كل فحص للمباريات المباشرة
+    "LIVE_POLL_SECONDS": "60",
+    // بريدك أو رابط موقعك (مطلوب لخدمة تنبيهات Apple)
+    "VAPID_SUBJECT": "mailto:admin@example.com"
+  },
+  "observability": { "enabled": true }
+}
