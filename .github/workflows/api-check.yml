@@ -1,0 +1,34 @@
+# فحص يدوي لما تتيحه خطة API-Football (يستهلك نحو 8 طلبات)
+name: API-Football plan check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe endpoints
+        env:
+          KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          [ -n "$KEY" ] || { echo "::error::API_FOOTBALL_KEY غير موجود"; exit 1; }
+          api() { curl -s -H "x-apisports-key: $KEY" "https://v3.football.api-sports.io$1"; }
+          report() {
+            echo "$2" | jq -r --arg n "$1" '"\($n): results=\(.results // 0) errors=\((.errors // []) | if type=="array" then join(" | ") else (to_entries|map("\(.key): \(.value)")|join(" | ")) end)"'
+          }
+          s=$(api /status); echo "$s" | jq -r '"plan=\(.response.subscription.plan) used=\(.response.requests.current)/\(.response.requests.limit_day)"'
+          report live "$(api '/fixtures?live=all')"
+          for d in -1 0 1 3; do
+            day=$(date -u -d "$d day" +%F)
+            r=$(api "/fixtures?date=$day")
+            report "date $day" "$r"
+            [ "$d" = 0 ] && id=$(echo "$r" | jq -r '.response[0].fixture.id // empty')
+          done
+          if [ -n "$id" ]; then
+            r=$(api "/fixtures?id=$id")
+            report "fixture-detail" "$r"
+            echo "$r" | jq -r '"  events=\(.response[0].events|length) lineups=\(.response[0].lineups|length) stats=\(.response[0].statistics|length)"'
+          fi
+          report "standings 307/2026" "$(api '/standings?league=307&season=2026')"
+          report "standings 307/2025" "$(api '/standings?league=307&season=2025')"
