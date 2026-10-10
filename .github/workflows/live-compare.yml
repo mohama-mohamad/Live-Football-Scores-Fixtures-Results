@@ -1,0 +1,23 @@
+# مقارنة يدوية: النتائج المباشرة في API-Football مقابل football-data.org (لقياس تأخر المجانية)
+name: Live sources compare
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare
+        env:
+          AF: ${{ secrets.API_FOOTBALL_KEY }}
+          FD: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          for round in 1 2; do
+            echo "===== $(date -u +%T) UTC (جولة $round)"
+            curl -s -H "x-apisports-key: $AF" 'https://v3.football.api-sports.io/fixtures?live=39-140-135-78-61-2' \
+              | jq -r '.response[] | "AF  \(.teams.home.name) \(.goals.home)-\(.goals.away) \(.teams.away.name)  [\(.fixture.status.short) \(.fixture.status.elapsed)'"'"']"'
+            curl -s -H "X-Auth-Token: $FD" 'https://api.football-data.org/v4/matches?status=IN_PLAY,PAUSED,LIVE' \
+              | jq -r '.matches[] | "FD  \(.homeTeam.shortName) \(.score.fullTime.home)-\(.score.fullTime.away) \(.awayTeam.shortName)  [\(.status) minute=\(.minute // "-") updated=\(.lastUpdated)]"'
+            [ $round = 1 ] && sleep 150
+          done

@@ -373,7 +373,8 @@ export async function refreshLive(env: Env, p: Provider = getProvider(env, 'live
     if (e instanceof BudgetExceededError) return { polled: false, reason: 'budget', notices: [] };
     // فشل مؤقت: نعيد المحاولة بتباعد متزايد (3، 6، 12... دقيقة، حتى الفترة المخططة) حتى لا يُهدر الرصيد
     const failures = Number((await getMeta(env, 'live_failures')) ?? 0) + 1;
-    const retryMs = Math.min(intervalMs, 3 * 60_000 * 2 ** Math.min(failures - 1, 6));
+    // حتى ساعة كحد أقصى (رفض متكرر من المزوّد يعني أن الانتظار القصير يهدر الرصيد فقط)
+    const retryMs = Math.min(60 * 60_000, 3 * 60_000 * 2 ** Math.min(failures - 1, 6));
     await setMeta(env, 'live_failures', String(failures));
     await setMeta(env, 'live_poll', String(now - intervalMs + retryMs));
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
